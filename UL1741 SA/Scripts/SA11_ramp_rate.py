@@ -38,14 +38,51 @@ from svpelab import pvsim
 from svpelab import das
 from svpelab import der
 from svpelab import loadsim
-
-import sunspec.core.client as client
+import result as rslt
 
 import script
-import openpyxl
 
 TRIP_WAIT_DELAY = 5
 POWER_WAIT_DELAY = 5
+
+'''
+def test_pass_fail(i_target=None, ds=None):
+
+    i_10 = i_target * .1
+    i_90 = i_target * .9
+
+    passfail = 'Fail'
+
+    point = None
+    trigger_data = []
+    try:
+        point = 'AC_IRMS_1'
+        idx = ds.points.index(point)
+        i_data = ds.data[idx]
+        point = 'TRIGGER'
+        idx = ds.points.index(point)
+        trigger_data = ds.data[idx]
+    except ValueError, e:
+        ts.fail('Data point %s not in dataset' % (point))
+    if len(trigger_data) <= 0:
+        ts.fail('No data in dataset')
+
+    for t in range(len(trigger_data)):
+        if t
+        if v_target[i] != 0:
+            act = var[i]
+            target = var_target[i]
+            min = target - var_msa
+            max = target + var_msa
+            var_act.append(var[i])
+            var_target.append(target)
+            var_min.append(min)
+            var_max.append(max)
+            if act < min or act > max:
+                passfail = 'Fail'
+
+    return (passfail)
+'''
 
 def test_run():
 
@@ -56,6 +93,15 @@ def test_run():
     daq_rms = None
     daq_wf = None
     eut = None
+
+    # result params
+    result_params = {
+        'plot.title': 'title_name',
+        'plot.x.title': 'Time (secs)',
+        'plot.x.points': 'TIME',
+        'plot.y.points': 'AC_IRMS_1',
+        'plot.y.title': 'Current (A)'
+    }
 
     try:
         v_nom = ts.param_value('eut.v_nom')
@@ -118,9 +164,9 @@ def test_run():
             eut.config()
 
         if soft_start:
-            test_str = 'ss'
+            test_label = 'ss'
         else:
-            test_str = 'rr'
+            test_label = 'rr'
 
         # For each ramp rate test level in Table SA11.1
         for rr in ramp_rates:
@@ -129,24 +175,29 @@ def test_run():
             if soft_start:
                 # set soft start ramp rate
                 if eut is not None:
-                    eut.soft_start_ramp_rate(rr)
+                    eut.ramp_rates(params={'soft_start': rr * 100})
+                    # eut.soft_start_ramp_rate(rr)
                 sample_duration = duration + TRIP_WAIT_DELAY + t_reconnect
             else:
                 # set normal ramp rate
                 if eut is not None:
-                    eut.ramp_rate(rr)
+                    eut.ramp_rates(params={'ramp_rate': rr * 100})
+                    # eut.ramp_rate(rr)
                 sample_duration = duration + POWER_WAIT_DELAY
 
             for count in range(1, n_r + 1):
                 if daq_rms is not None:
                     ts.log('Starting data capture %s' % (rr))
                     daq_rms.data_capture(True)
+                    ts.log('Waiting for 3 seconds to start test')
+                    ts.sleep(3)
                 if soft_start:
                     # set to trip voltage
                     v1, v2, v3 = grid.voltage()
+                    v_trip_grid = (v1 * v_trip/100)
                     ts.log('Nominal voltage = %s' % (v1))
-                    ts.log('Setting voltage to trip voltage (%s V)' % (v1 * v_trip/100))
-                    grid.voltage((v_trip, v2, v3))
+                    ts.log('Setting voltage to trip voltage (%s V)' % v_trip_grid)
+                    grid.voltage((v_trip_grid, v2, v3))
                     ts.log('Waiting %s seconds' % (TRIP_WAIT_DELAY))
                     ts.sleep(TRIP_WAIT_DELAY)
                     ts.log('Setting voltage to original nominal voltage (%s V)' % v1)
@@ -167,9 +218,12 @@ def test_run():
                     ts.log('Sampling complete')
                     daq_rms.data_capture(False)
                     ds = daq_rms.data_capture_dataset()
-                    filename = '%s_%s_%s.csv' % (test_str, str(int(rr)), str(count))
+
+                    test_name = '%s_%s_%s' % (test_label, str(int(rr)), str(count))
+                    filename = '%s.csv' % (test_name)
                     ds.to_csv(ts.result_file_path(filename))
-                    ts.result_file(filename)
+                    result_params['plot.title'] = test_name
+                    ts.result_file(filename, params=result_params)
                     ts.log('Saving data capture %s' % (filename))
 
         result = script.RESULT_COMPLETE
@@ -191,6 +245,11 @@ def test_run():
             daq_rms.close()
         if daq_wf is not None:
             daq_wf.close()
+
+        # create result workbook
+        file = ts.config_name() + '.xlsx'
+        rslt.result_workbook(file, ts.results_dir(), ts.result_dir())
+        ts.result_file(file)
 
     return result
 

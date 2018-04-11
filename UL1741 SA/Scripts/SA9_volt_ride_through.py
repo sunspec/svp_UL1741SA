@@ -7,11 +7,9 @@ from svpelab import loadsim
 from svpelab import pvsim
 from svpelab import das
 from svpelab import der
-
-import sunspec.core.client as client
+import result as rslt
 
 import script
-import openpyxl
 import time
 
 def voltage_rt_profile(v_nom=100, v1_t=100, v2_t=100, v3_t=100, t_fall=0, t_hold=1, t_rise=0, t_dwell=5, n=5):
@@ -45,10 +43,39 @@ def voltage_rt_profile(v_nom=100, v1_t=100, v2_t=100, v3_t=100, t_fall=0, t_hold
 
     return profile
 
+def test_pass_fail(p_target=None, ds=None):
+
+    passfail = 'Fail'
+
+    point = 'AC_IRMS_1'
+    irms_data = []
+    try:
+        idx = ds.points.index(point)
+        irms_data = ds.data[idx]
+    except ValueError, e:
+        ts.fail('Data point %s not in dataset' % (point))
+    if len(irms_data) <= 0:
+        ts.fail('No data for data point %s' % (point))
+
+    return (passfail)
+
 def test_run():
 
     result = script.RESULT_FAIL
     eut = grid = load = pv = daq_rms = daq_wf = None
+
+    sc_points = ['AC_IRMS_MIN']
+
+    # result params
+    result_params = {
+        'plot.title': ts.name,
+        'plot.x.title': 'Time (secs)',
+        'plot.x.points': 'TIME',
+        'plot.y.points': 'AC_VRMS_1',
+        'plot.y.title': 'Voltage (V)',
+        'plot.y2.points': 'AC_IRMS_1, AC_IRMS_MIN',
+        'plot.y2.title': 'Current (A)'
+    }
 
     try:
         test_label = ts.param_value('vrt.test_label')
@@ -79,9 +106,9 @@ def test_run():
         # set power levels that are enabled
         power_levels = []
         if ts.param_value('vrt.p_100') == 'Enabled':
-            power_levels.append((100, '100'))
+            power_levels.append((100.0, '100'))
         if ts.param_value('vrt.p_20') == 'Enabled':
-            power_levels.append((20, '20'))
+            power_levels.append((20.0, '20'))
 
         # set phase tests that are enabled
         phase_tests = []
@@ -111,6 +138,14 @@ def test_run():
         grid = gridsim.gridsim_init(ts)
         profile_supported = False
 
+        # In cases where the grid simulator has voltage rise/loss on the line to the EUT or operates through a
+        # transformer, the nominal voltage of the grid simulator won't be the same as the EUT and a correction
+        # factor is applied.
+        try:
+            v_nom_grid = grid.v_nom_param
+        except Exception, e:
+            v_nom_grid = v_nom
+
         # load simulator initialization
         load = loadsim.loadsim_init(ts)
         if load is not None:
@@ -122,9 +157,11 @@ def test_run():
         pv.power_on()
 
         # initialize rms data acquisition
-        daq_rms = das.das_init(ts, 'das_rms')
+        daq_rms = das.das_init(ts, 'das_rms', sc_points=sc_points)
         if daq_rms is not None:
             ts.log('DAS RMS device: %s' % (daq_rms.info()))
+            daq_rms.sc['SC_TRIG'] = 0
+            daq_rms.sc['AC_IRMS_MIN'] = ''
 
         # initialize waveform data acquisition
         daq_wf = das.das_init(ts, 'das_wf')
@@ -136,19 +173,37 @@ def test_run():
         if eut is not None:
             eut.config()
 
+        # open result summary file
+        '''
+        result_summary_filename = 'result_summary.csv'
+        result_summary = open(ts.result_file_path(result_summary_filename), 'a+')
+        ts.result_file(result_summary_filename)
+        result_summary.write('Result, Test Name, Power Level, Phase, Dataset File\n')
+        '''
+
         # perform all power levels and phase tests
         for power_level in power_levels:
             # set test power level
             power = power_level[0]/100 * p_rated
             pv.power_set(power)
-            ts.log('Setting power level to %s%% of rated, waiting 5 seconds' % (power_level[0]))
-            # delay to allow power change to take effect
-            ts.sleep(5)
+            ts.log('Setting power level to %s%% of rated' % (power_level[0]))
+
+            '''
+            # initializing to nominal
+            v = v_nom_grid
+            grid.voltage((v, v, v))
+            ts.log('Initializing to nominal voltage: v_1 = %s  v_2 = %s  v_3 = %s for %s seconds' % (v, v, v,
+                                                                                                     t_dwell))
+            ts.sleep(t_dwell)
+            '''
 
             for phase_test in phase_tests:
                 if daq_rms is not None:
+                    daq_rms.sc['AC_IRMS_MIN'] = ''
                     ts.log('Starting RMS data capture')
                     daq_rms.data_capture(True)
+                    ts.log('Waiting 5 seconds to start test')
+                    ts.sleep(5)
                 v_1, v_2, v_3 = phase_test[0]
                 ts.log('Starting %s, v1 = %s%%  v2 = %s%%  v3 = %s%%' % (phase_test[1], v_1, v_2, v_3))
                 if profile_supported:
@@ -170,12 +225,21 @@ def test_run():
                     # execute test sequence
                     ts.log('Test duration is %s seconds' % ((float(t_dwell) + float(t_hold)) * float(n_r) +
                                                             float(t_dwell)))
+
+                    # get initial current level to determine threshold
+                    if daq_rms is not None:
+                        daq_rms.data_sample()
+                        data = daq_rms.data_capture_read()
+                        irms = data.get('AC_IRMS_1')
+                        if irms is not None:
+                             daq_rms.sc['AC_IRMS_MIN'] = round(irms * .8, 2)
+
                     ts.sleep(t_hold)
                     for i in range(n_r):
-                        v = (v_n/100) * v_nom
-                        v1 = (v_1/100) * v_nom
-                        v2 = (v_2/100) * v_nom
-                        v3 = (v_3/100) * v_nom
+                        v = (v_n/100) * v_nom_grid
+                        v1 = (v_1/100) * v_nom_grid
+                        v2 = (v_2/100) * v_nom_grid
+                        v3 = (v_3/100) * v_nom_grid
 
                         grid.voltage((v, v, v))
                         ts.log('Setting voltage: v_1 = %s  v_2 = %s  v_3 = %s for %s seconds' % (v, v, v,
@@ -191,9 +255,11 @@ def test_run():
                 if daq_rms is not None:
                     daq_rms.data_capture(False)
                     ds = daq_rms.data_capture_dataset()
-                    filename = '%s_rms_%s_%s.csv' % (test_label, phase_test[2], power_level[1])
+                    test_name = '%s_rms_%s_%s' % (test_label, phase_test[2], power_level[1])
+                    filename = '%s.csv' % (test_name)
                     ds.to_csv(ts.result_file_path(filename))
-                    ts.result_file(filename)
+                    result_params['plot.title'] = test_name
+                    ts.result_file(filename, params=result_params)
                     ts.log('Saving data capture %s' % (filename))
 
         result = script.RESULT_COMPLETE
@@ -203,6 +269,11 @@ def test_run():
         if reason:
             ts.log_error(reason)
     finally:
+
+        # return voltage and power level to normal
+        grid.voltage(v_nom_grid)
+        pv.power_set(p_rated)
+
         if eut is not None:
             eut.close()
         if grid is not None:
@@ -215,6 +286,11 @@ def test_run():
             daq_rms.close()
         if daq_wf is not None:
             daq_wf.close()
+
+        # create result workbook
+        file = ts.config_name() + '.xlsx'
+        rslt.result_workbook(file, ts.results_dir(), ts.result_dir())
+        ts.result_file(file)
 
     return result
 
@@ -230,6 +306,8 @@ def run(test_script):
         ts.log_debug('**************  Starting %s  **************' % (ts.config_name()))
         ts.log_debug('Script: %s %s' % (ts.name, ts.info.version))
         ts.log_active_params()
+
+        ts.svp_version(required='1.5.3')
 
         result = test_run()
 

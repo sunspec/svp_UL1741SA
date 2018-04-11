@@ -39,7 +39,47 @@ from svpelab import pvsim
 from svpelab import das
 from svpelab import der
 import script
-import openpyxl
+import result as rslt
+
+def test_pass_fail(pf_act=None, pf_target=None, pf_msa=None):
+
+    # set pf range and if range spans pf=1
+    pf_lower = pf_upper = 1.0
+    span = False
+    if pf_target < 0:
+        offset = 1.0 + pf_target
+        if offset <= pf_msa:
+            pf_upper = 1.0 - (pf_msa - offset)
+            span = True
+        else:
+            pf_upper = pf_target - pf_msa
+        pf_lower = pf_target + pf_msa
+    elif pf_target < 1.0:
+        offset = 1.0 - pf_target
+        if offset <= pf_msa:
+            pf_lower = -(1.0 - (pf_msa - offset))
+            if pf_lower == -1.0:
+                pf_lower = 1.0
+            span = True
+        else:
+            pf_lower = pf_target - pf_msa
+        pf_upper = pf_target + pf_msa
+    elif pf_target == 1.0:
+        pf_upper = 1.0 - pf_msa
+        pf_lower = -pf_upper
+        span = True
+
+    # check if pf in range
+    passfail = 'Fail'
+    if ((span and ((pf_act == 1.0) or
+                   (pf_act < 0 and abs(pf_act) >= abs(pf_lower)) or
+                   (pf_act < 1.0 and pf_act >= pf_upper))) or
+        ((pf_act < 0 and pf_act >= pf_upper and pf_act <= pf_lower) or
+         (pf_act <= 1.0 and pf_act >= pf_lower and pf_act <= pf_upper))):
+        passfail = 'Pass'
+
+    return (passfail, pf_lower, pf_upper)
+
 
 def test_run():
 
@@ -48,12 +88,27 @@ def test_run():
     pv = None
     daq = None
     eut = None
+    rs = None
+
+    sc_points = ['PF_TARGET', 'PF_MAX', 'PF_MIN']
+
+    # result params
+    result_params = {
+        'plot.title': ts.name,
+        'plot.x.title': 'Time (secs)',
+        'plot.x.points': 'TIME',
+        'plot.y.points': 'AC_PF_1, PF_TARGET',
+        'plot.y.title': 'Power Factor',
+        'plot.y2.points': 'AC_IRMS_1',
+        'plot.y2.title': 'Current (A)'
+    }
 
     try:
         p_rated = ts.param_value('eut.p_rated')
         pf_min_ind = ts.param_value('eut.pf_min_ind')
         pf_min_cap = ts.param_value('eut.pf_min_cap')
         pf_settling_time = ts.param_value('eut.pf_settling_time')
+        pf_msa = ts.param_value('eut.pf_msa')
 
         p_low = p_rated * .2
         pf_mid_ind = (-1 + pf_min_ind)/2
@@ -71,7 +126,7 @@ def test_run():
         pv.power_on()
 
         # initialize data acquisition
-        daq = das.das_init(ts)
+        daq = das.das_init(ts, sc_points = sc_points)
         ts.log('DAS device: %s' % daq.info())
 
         '''
@@ -109,6 +164,13 @@ def test_run():
 
         n_r = ts.param_value('spf.n_r')
 
+        # open result summary file
+        result_summary_filename = 'result_summary.csv'
+        result_summary = open(ts.result_file_path(result_summary_filename), 'a+')
+        ts.result_file(result_summary_filename)
+        result_summary.write('Result, Test Name, Power Level (%), Iteration, PF Actual, PF Target, PF MSA, PF Min Allowed,'
+                             'PF Max Allowed, Dataset File\n')
+
         for pf in pf_targets:
             for power_level in power_levels:
                 '''
@@ -125,9 +187,15 @@ def test_run():
                     displacement
                     '''
                     #ts.log('Fixed PF settings: %s' % eut.fixed_pf())
-                    eut.fixed_pf(params={'Ena': True, 'PF': 1.0})
-                    pf_setting = eut.fixed_pf()
-                    ts.log('PF setting: %s' % (pf_setting))
+                    ### use pass_fail to get lower, upper
+                    passfail, pf_lower, pf_upper = test_pass_fail(pf_act=1.0, pf_target=1.0, pf_msa=pf_msa)
+                    daq.sc['PF_TARGET'] = 1.0
+                    daq.sc['PF_MAX'] = pf_upper
+                    daq.sc['PF_MIN'] = pf_lower
+                    if eut is not None:
+                        eut.fixed_pf(params={'Ena': True, 'PF': 1.0})
+                        pf_setting = eut.fixed_pf()
+                        ts.log('PF setting: %s' % (pf_setting))
                     ts.log('Starting data capture for pf = %s' % (1.0))
                     daq.data_capture(True)
                     ts.log('Sampling for %s seconds' % (pf_settling_time * 3))
@@ -144,12 +212,18 @@ def test_run():
                     7) Set the EUT power factor to the value in Test 1 of Table SA12.1. Measure the AC source voltage
                     and EUT current to measure the displacement power factor and record all data.
                     '''
-                    parameters={'Ena': True, 'PF': pf}
-                    ts.log('PF set: %s' % (parameters))
-                    eut.fixed_pf(params=parameters)
-                    ts.log('PF set exit: %s' % (parameters))
-                    pf_setting = eut.fixed_pf()
-                    ts.log('PF setting: %s' % (pf_setting))
+                    ### use pass_fail to get lower, upper
+                    passfail, pf_lower, pf_upper = test_pass_fail(pf_act=1.0, pf_target=pf, pf_msa=pf_msa)
+                    daq.sc['PF_TARGET'] = pf
+                    daq.sc['PF_MAX'] = pf_upper
+                    daq.sc['PF_MIN'] = pf_lower
+                    if eut is not None:
+                        parameters = {'Ena': True, 'PF': pf}
+                        ts.log('PF set: %s' % (parameters))
+                        eut.fixed_pf(params=parameters)
+                        ts.log('PF set exit: %s' % (parameters))
+                        pf_setting = eut.fixed_pf()
+                        ts.log('PF setting: %s' % (pf_setting))
                     ts.log('Starting data capture for pf = %s' % (pf))
                     daq.data_capture(True)
                     ts.log('Sampling for %s seconds' % (pf_settling_time * 3))
@@ -157,11 +231,39 @@ def test_run():
                     ts.log('Sampling complete')
                     daq.data_capture(False)
                     ds = daq.data_capture_dataset()
-                    filename = 'spf_%s_%s_%s.csv' % (str(pf * 1000), str(power_label), str(count))
+                    testname = 'spf_%s_%s_%s' % (str(pf * 1000), str(power_label), str(count))
+                    filename = '%s.csv' % (testname)
                     ds.to_csv(ts.result_file_path(filename))
-                    ts.result_file(filename)
+                    result_params['plot.title'] = testname
+                    ts.result_file(filename, params=result_params)
                     ts.log('Saving data capture %s' % (filename))
 
+                    # create result summary entry
+                    pf_point = 'AC_PF_1'
+                    pf_data = []
+                    try:
+                        idx = ds.points.index(pf_point)
+                        pf_data = ds.data[idx]
+                    except ValueError, e:
+                        ts.fail('Data point %s not in dataset' % (pf_point))
+                    if len(pf_data) <= 0:
+                        ts.fail('No data for data point %s' % (pf_point))
+
+                    # verify starting pf
+                    pf_act = float(pf_data[0])
+
+                    passfail, pf_lower, pf_upper = test_pass_fail(pf_act=pf_act, pf_target=1.0, pf_msa=pf_msa)
+                    result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s\n' %
+                                         (passfail, ts.config_name(), power * 100, count, pf_act, pf, pf_msa, pf_lower,
+                                          pf_upper, filename))
+
+                    # use the last PF measurement for the pass/fail checks
+                    pf_act = float(pf_data[-1])
+
+                    passfail, pf_lower, pf_upper = test_pass_fail(pf_act=pf_act, pf_target=pf, pf_msa=pf_msa)
+                    result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s\n' %
+                                         (passfail, ts.config_name(), power * 100, count, pf_act, pf, pf_msa, pf_lower,
+                                          pf_upper, filename))
                     '''
                     8) Repeat steps (6) - (8) for two additional times for a total of three repetitions.
                     '''
@@ -184,6 +286,9 @@ def test_run():
         if reason:
             ts.log_error(reason)
     finally:
+
+        pv.power_set(p_rated)
+
         if grid is not None:
             grid.close()
         if pv is not None:
@@ -192,6 +297,13 @@ def test_run():
             daq.close()
         if eut is not None:
             eut.close()
+        if rs is not None:
+            rs.close()
+
+        # create result workbook
+        file = ts.config_name() + '.xlsx'
+        rslt.result_workbook(file, ts.results_dir(), ts.result_dir())
+        ts.result_file(file)
 
     return result
 
@@ -235,9 +347,12 @@ info.param('spf.pf_mid_cap', label='Mid-range capacitive', default='Enabled', va
 
 info.param_group('eut', label='EUT Parameters', glob=True)
 info.param('eut.p_rated', label='P_rated', default=3000)
+info.param('eut.phases', label='Phases', default='Single Phase', values=['Single Phase', '3-Phase 3-Wire',
+                                                                         '3-Phase 4-Wire'])
 info.param('eut.pf_min_ind', label='PF_min_ind', default=.850)
 info.param('eut.pf_min_cap', label='PF_min_cap', default=-.850)
-info.param('eut.pf_settling_time', label='PF Settling Time', default=1)
+info.param('eut.pf_settling_time', label='PF Settling Time (secs)', default=1)
+info.param('eut.pf_msa', label='PF Manufacturer Stated Accuracy (PF units)', default=5.0)
 
 der.params(info)
 das.params(info)

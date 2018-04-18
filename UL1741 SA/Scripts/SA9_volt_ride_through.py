@@ -1,3 +1,34 @@
+"""
+Copyright (c) 2018, Sandia National Labs and SunSpec Alliance
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+Redistributions of source code must retain the above copyright notice, this
+list of conditions and the following disclaimer.
+
+Redistributions in binary form must reproduce the above copyright notice, this
+list of conditions and the following disclaimer in the documentation and/or
+other materials provided with the distribution.
+
+Neither the names of the Sandia National Labs and SunSpec Alliance nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Questions can be directed to support@sunspec.org
+"""
 
 import sys
 import os
@@ -8,7 +39,7 @@ from svpelab import pvsim
 from svpelab import das
 from svpelab import der
 import result as rslt
-
+from svpelab import hil
 import script
 import time
 
@@ -62,7 +93,7 @@ def test_pass_fail(p_target=None, ds=None):
 def test_run():
 
     result = script.RESULT_FAIL
-    eut = grid = load = pv = daq_rms = daq_wf = None
+    eut = grid = load = pv = daq_rms = daq_wf = chil = None
 
     sc_points = ['AC_IRMS_MIN']
 
@@ -133,6 +164,11 @@ def test_run():
                     phase_tests.append(((v_n, v_t, v_t), 'Phase 2-3 Fault Test', 'p23'))
                 if ts.param_value('vrt.phase_1_3') == 'Enabled':
                     phase_tests.append(((v_t, v_n, v_t), 'Phase 1-3 Fault Test', 'p13'))
+
+        # initialize HIL environment, if necessary
+        chil = hil.hil_init(ts)
+        if chil is not None:
+            chil.config()
 
         # grid simulator is initialized with test parameters and enabled
         grid = gridsim.gridsim_init(ts)
@@ -286,6 +322,8 @@ def test_run():
             daq_rms.close()
         if daq_wf is not None:
             daq_wf.close()
+        if chil is not None:
+            chil.close()
 
         # create result workbook
         file = ts.config_name() + '.xlsx'

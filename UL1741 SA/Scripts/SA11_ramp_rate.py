@@ -38,6 +38,7 @@ from svpelab import pvsim
 from svpelab import das
 from svpelab import der
 from svpelab import loadsim
+from svpelab import hil
 import result as rslt
 
 import script
@@ -93,6 +94,7 @@ def test_run():
     daq_rms = None
     daq_wf = None
     eut = None
+    chil = None
 
     # result params
     result_params = {
@@ -134,6 +136,12 @@ def test_run():
             - Set all AC source parameters to the nominal operating conditions for the EUT.
             - Turn on the EUT and allow to reach steady state.
         '''
+
+        # initialize HIL environment, if necessary
+        chil = hil.hil_init(ts)
+        if chil is not None:
+            chil.config()
+
         # grid simulator is initialized with test parameters and enabled
         grid = gridsim.gridsim_init(ts)
         profile_supported = False
@@ -245,6 +253,8 @@ def test_run():
             daq_rms.close()
         if daq_wf is not None:
             daq_wf.close()
+        if chil is not None:
+            chil.close()
 
         # create result workbook
         file = ts.config_name() + '.xlsx'

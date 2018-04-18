@@ -251,7 +251,7 @@ def test_run():
         q_min_over = q_max_over/4
         q_min_under = q_max_under/4
         v_dev = min(v_nom - v_min, v_max - v_nom)
-        # calculate k_var_min if not suppied in the SRD
+        # calculate k_var_min if not supplied in the SRD
         if k_var_min is None:
             k_var_min = (q_max_over/4)/(v_dev - deadband_max/2)
         k_var_avg = (k_var_min + k_var_max)/2
@@ -395,6 +395,11 @@ def test_run():
         2) Set all AC source parameters to the nominal operating conditions for the EUT. Frequency is set at nominal
         and held at nominal throughout this test. Set the EUT power to Pmax.
         '''
+        # initialize HIL environment, if necessary
+        chil = hil.hil_init(ts)
+        if chil is not None:
+            chil.config()
+
         # grid simulator is initialized with test parameters and enabled
         grid = gridsim.gridsim_init(ts)
 

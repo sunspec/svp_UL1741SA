@@ -74,6 +74,16 @@ def sample_points(p, segment_count=3):
     return points
 
 def v_q(value, v, q):
+    """
+    Interpolation function to find the target reactive power based on a 4 point VV curve
+
+    TODO: make generic for n-point curves
+
+    :param value: voltage point for the interpolation
+    :param v: VV voltage points
+    :param q: VV reactive power points
+    :return: target reactive power
+    """
     if value <= v[1]:
         q_value = q[1]
     elif value < v[2]:
@@ -90,82 +100,76 @@ def v_q(value, v, q):
         q_value = q[4]
     return round(q_value, 1)
 
-# returns points for q_target, q_target_min, q_target_max
+
 def q_msa_range(v_value, v_msa, q_msa, v, q):
-    q_target = v_q(v_value, v, q)
-    q1 = v_q(v_value - v_msa, v, q)
-    q2 = v_q(v_value + v_msa, v, q)
+    """
+    Determine reactive power target and the min/max q values for pass/fail acceptance based on manufacturer's specified
+    accuracies (MSAs)
+
+    :param v_value: measured voltage value
+    :param v_msa: manufacturer's specified accuracy of voltage
+    :param q_msa: manufacturer's specified accuracy of reactive power
+    :param v: VV voltage points
+    :param q: VV reactive power points
+    :return: points for q_target, q_target_min, q_target_max
+    """
+
+    q_target = v_q(v_value, v, q)    # target reactive power for the voltage measurement
+    q1 = v_q(v_value - v_msa, v, q)  # reactive power target from the lower voltage limit
+    q2 = v_q(v_value + v_msa, v, q)  # reactive power target from the upper voltage limit
     if q1 >= q_target:
-        return (q_target, round(q2 - q_msa, 1), round(q1 + q_msa, 1))
+        # if the VV curve has a negative slope (as is generally the case)
+        # add the reactive power MSA to the high side (left point, q1)
+        # subtract the reactive power MSA from the low side (right point, q2)
+        #
+        #                          \ * (v_value - v_msa, q_upper)
+        #                           \
+        #                            . (v_value - v_msa, q1)
+        #                             \
+        #                              x (v_value, q_target)
+        #                               \
+        #                                . (v_value + v_msa, q2)
+        #                                 \
+        #     (v_value + v_msa, q_lower) * \
+
+        q_upper = round(q1 + q_msa, 1)
+        q_lower = round(q2 - q_msa, 1)
+        return q_target, q_lower, q_upper
     else:
-        return (q_target, round(q1 - q_msa, 1), round(q2 + q_msa, 1))
+        q_lower = round(q1 - q_msa, 1)
+        q_upper = round(q2 + q_msa, 1)
+        return q_target, q_lower, q_upper
 
-# returns points for q_target, q_target_min, q_target_max
-def q_msa_range_x(v_value, v_msa, v_msa_pct, q_msa, q_msa_pct, v, q):
-    q_target = v_q(v_value, v, q)
-    q1 = v_q(v_value - v_msa, v, q)
-    q2 = v_q(v_value + v_msa, v, q)
-    if q1 >= q_target:
-        return (q_target, round(q2 - q_msa, 1), round(q1 + q_msa, 1))
-    else:
-        return (q_target, round(q1 - q_msa, 1), round(q2 + q_msa, 1))
 
-'''
-def test_pass_fail(var_avail=None, var_msa=None, ds=None):
-    v = []
-    var = []
-    v_target = []
-    var_target = []
+def test_pass_fail(var_act, var_min, var_max, var_aval=None, q_msa=None, priority='Reactive'):
+    """
+    Apply pass/fail criterion for each phase
 
-    passfail = 'Pass'
-    var_act = []
-    var_target = []
-    var_min = []
-    var_max = []
-
-    point = None
-    try:
-        point = 'AC_VRMS_1'
-        idx = ds.points.index(point)
-        v = ds.data[idx]
-        point = 'AC_Q_1'
-        idx = ds.points.index(point)
-        var = ds.data[idx]
-        point = 'V_TARGET'
-        idx = ds.points.index(point)
-        v_target = ds.data[idx]
-        point = 'Q_TARGET'
-        idx = ds.points.index(point)
-        var_target = ds.data[idx]
-    except ValueError, e:
-        ts.fail('Data point %s not in dataset' % (point))
-    if len(v_target) <= 0:
-        ts.fail('No data in dataset')
-
-    for i in range(len(v_target)):
-        if v_target[i] != 0:
-            act = var[i]
-            target = var_target[i]
-            min = target - var_msa
-            max = target + var_msa
-            var_act.append(var[i])
-            var_target.append(target)
-            var_min.append(min)
-            var_max.append(max)
-            if act < min or act > max:
-                passfail = 'Fail'
-
-    return (passfail, var_act, var_target, var_min, var_max)
-'''
-
-def test_pass_fail(var_act, var_min, var_max):
+    :param var_act: reactive power being produced by EUT based on VV function
+    :param var_min: VV reactive power lower limit
+    :param var_max: VV reactive power upper limit
+    :param var_aval: VV reactive power available to the EUT
+    :param priority: 'Reactive' or 'Active' power priority for the VV function
+    :return: 'Pass' or 'Fail' based on the results
+    """
 
     passfail = 'Fail'
 
-    if var_min <= var_act <= var_max:
-        passfail = 'Pass'
+    if priority == 'Reactive':
+        if var_min <= var_act <= var_max:
+            passfail = 'Pass'
+    else:  # priority is 'Active Power'
+        if var_aval <= var_max:
+            # if the available vars does not apply
+            if var_min <= var_act <= var_max:
+                passfail = 'Pass'
+        else:
+            # if the available vars does apply
+            if (var_aval - q_msa) <= var_act <= (var_aval + q_msa):
+                passfail = 'Pass'
 
     return passfail
+
 
 def test_run():
 
@@ -175,8 +179,8 @@ def test_run():
     grid = None
     chil = None
     result_summary = None
-
-    sc_points = ['V_ACT', 'Q_ACT', 'V_TARGET', 'Q_TARGET', 'Q_MIN', 'Q_MAX', 'Q_MIN_ERROR', 'Q_MAX_ERROR']
+    p_max = None
+    v_nom_grid = None
 
     result_params={
         'plot.title': 'title_name',
@@ -198,25 +202,37 @@ def test_run():
 
     try:
         # read test parameters
-        tests_param = ts.param_value('eut.tests')
+        tests_param = ts.param_value('eut_vv.tests')
 
-        s_rated = ts.param_value('eut.s_rated')
-        p_rated = ts.param_value('eut.p_rated')
-        var_rated = ts.param_value('eut.var_rated')
-        # v_dc_min = ts.param_value('eut.v_dc_min')  ##
-        # v_dc_max = ts.param_value('eut.v_dc_max')  ##
-        v_nom = ts.param_value('eut.v_nom')
-        v_min = ts.param_value('eut.v_min')
-        v_max = ts.param_value('eut.v_max')
-        v_msa = ts.param_value('eut.v_msa')
-        var_msa = ts.param_value('eut.var_msa')
-        var_ramp_max = ts.param_value('eut.var_ramp_max')
-        q_max_over = ts.param_value('eut.q_max_over')
-        q_max_under = ts.param_value('eut.q_max_under')
-        k_var_max = ts.param_value('eut.k_var_max')
-        deadband_min = ts.param_value('eut.vv_deadband_min')
-        deadband_max = ts.param_value('eut.vv_deadband_max')
-        t_settling = ts.param_value('eut.vv_t_settling')
+        s_rated = ts.param_value('eut_vv.s_rated')
+        p_rated = ts.param_value('eut_vv.p_rated')
+        var_rated = ts.param_value('eut_vv.var_rated')
+        # v_dc_min = ts.param_value('eut_vv.v_dc_min')  ##
+        # v_dc_max = ts.param_value('eut_vv.v_dc_max')  ##
+        v_nom = ts.param_value('eut_vv.v_nom')
+        v_min = ts.param_value('eut_vv.v_min')
+        v_max = ts.param_value('eut_vv.v_max')
+        v_msa = ts.param_value('eut_vv.v_msa')
+        var_msa = ts.param_value('eut_vv.var_msa')
+        var_ramp_max = ts.param_value('eut_vv.var_ramp_max')
+        q_max_over = ts.param_value('eut_vv.q_max_over')
+        q_max_under = ts.param_value('eut_vv.q_max_under')
+        k_var_max = ts.param_value('eut_vv.k_var_max')
+        deadband_min = ts.param_value('eut_vv.vv_deadband_min')
+        deadband_max = ts.param_value('eut_vv.vv_deadband_max')
+        t_settling = ts.param_value('eut_vv.vv_t_settling')
+        phases = ts.param_value('eut_vv.phases')
+
+        if phases == 'Single Phase':
+            sc_points = ['V_ACT_1', 'Q_ACT_1', 'V_TARGET_1', 'Q_TARGET_1', 'Q_MIN_1', 'Q_MAX_1', 'Q_MIN_ERROR_1',
+                         'Q_MAX_ERROR_1']
+        else:
+            sc_points = ['V_ACT_1', 'Q_ACT_1', 'V_TARGET_1', 'Q_TARGET_1', 'Q_MIN_1', 'Q_MAX_1', 'Q_MIN_ERROR_1',
+                         'Q_MAX_ERROR_1',
+                         'V_ACT_2', 'Q_ACT_2', 'V_TARGET_2', 'Q_TARGET_2', 'Q_MIN_2', 'Q_MAX_2', 'Q_MIN_ERROR_2',
+                         'Q_MAX_ERROR_2',
+                         'V_ACT_3', 'Q_ACT_3', 'V_TARGET_3', 'Q_TARGET_3', 'Q_MIN_3', 'Q_MAX_3', 'Q_MIN_ERROR_3',
+                         'Q_MAX_ERROR_3']
 
         p_min_pct = ts.param_value('srd.vv_p_min_pct')
         p_max_pct = ts.param_value('srd.vv_p_max_pct')
@@ -418,15 +434,22 @@ def test_run():
 
         # initialize data acquisition
         daq = das.das_init(ts, sc_points=sc_points)
-        daq.sc['SC_TRIG'] = 0
-        daq.sc['V_ACT'] = ''
-        daq.sc['Q_ACT'] = ''
-        daq.sc['V_TARGET'] = ''
-        daq.sc['Q_TARGET'] = ''
-        daq.sc['Q_MIN'] = ''
-        daq.sc['Q_MAX'] = ''
-        daq.sc['Q_MIN_ERROR'] = ''
-        daq.sc['Q_MAX_ERROR'] = ''
+
+        if phases == 'Single Phase':
+            n_phase = 1
+        else:
+            n_phase = 3
+
+        for ph in range(n_phase):
+            ph_val = ph + 1  # phase names start at 1 (not zero)
+            daq.sc['V_ACT_%i' % ph_val] = ''
+            daq.sc['Q_ACT_%i' % ph_val] = ''
+            daq.sc['V_TARGET_%i' % ph_val] = ''
+            daq.sc['Q_TARGET_%i' % ph_val] = ''
+            daq.sc['Q_MIN_%i' % ph_val] = ''
+            daq.sc['Q_MAX_%i' % ph_val] = ''
+            daq.sc['Q_MIN_ERROR_%i' % ph_val] = ''
+            daq.sc['Q_MAX_ERROR_%i' % ph_val] = ''
 
         '''
         3) Turn on the EUT. Set all L/HVRT parameters to the widest range of adjustability possible with the
@@ -444,8 +467,14 @@ def test_run():
         result_summary_filename = 'result_summary.csv'
         result_summary = open(ts.result_file_path(result_summary_filename), 'a+')
         ts.result_file(result_summary_filename)
-        result_summary.write('Result, Test Name, Power Priority, Power Level, Iteration, Var MSA, Dataset File,'
-                             'Point Result, Var Actual, Var Target, Var Min Allowed, Var Max Allowed\n')
+        if n_phase == 1:
+            result_summary.write('Result, Test Name, Power Priority, Power Level, Iteration, Var MSA, Dataset File,'
+                                 'Point Result, Var Actual, Var Target, Var Min Allowed, Var Max Allowed\n')
+        else:
+            result_summary.write('Result, Test Name, Power Priority, Power Level, Iteration, Var MSA, Dataset File,'
+                                 'Point Result 1, Var Actual 1, Var Target 1, Var Min Allowed 1, Var Max Allowed 1,'
+                                 'Point Result 2, Var Actual 2, Var Target 2, Var Min Allowed 2, Var Max Allowed 2,'
+                                 'Point Result 3, Var Actual 3, Var Target 3, Var Min Allowed 3, Var Max Allowed 3\n')
 
         for priority in power_priorities:
             '''
@@ -475,8 +504,8 @@ def test_run():
 
                 ts.log('Voltage test points = %s' % (v_points))
                 ts.log('Var test points = %s' % (q_points))
-                ts.log('Var min test points = %s' % (q_min_points))
-                ts.log('Var max test points = %s' % (q_max_points))
+                ts.log('Var min pass/fail limits = %s' % (q_min_points))
+                ts.log('Var max pass/fail limits = %s' % (q_max_points))
 
                 '''
                 q_msa_range(v_value, v_msa, q_msa, v, q)
@@ -496,9 +525,9 @@ def test_run():
                 else:
                     raise script.ScriptFail('Unknown power priority setting: %s')
 
-                ts.log_debug({'v': [v[1]/v_nom*100.0, v[2]/v_nom*100.0, v[3]/v_nom*100.0, v[4]/v_nom*100.0],
-                    'var': [q[1]/q_max_over*100.0, q[2]/q_max_over*100.0, q[3]/q_max_over*100.0,
-                            q[4]/q_max_over*100.0]})
+                # ts.log_debug({'v': [v[1]/v_nom*100.0, v[2]/v_nom*100.0, v[3]/v_nom*100.0, v[4]/v_nom*100.0],
+                #     'var': [q[1]/q_max_over*100.0, q[2]/q_max_over*100.0, q[3]/q_max_over*100.0,
+                #             q[4]/q_max_over*100.0]})
 
                 # configure EUT if configure enabled
                 if tests[test][2]:
@@ -510,24 +539,29 @@ def test_run():
                                   round(v[4]/v_nom*100.0)],
                             'var': [round(q[1]/q_max_over*100.0), round(q[2]/q_max_over*100.0),
                                     round(q[3]/q_max_over*100.0), round(q[4]/q_max_over*100.0)],
-                            'Dept_Ref': dept_ref
+                            'Dept_Ref': dept_ref,
                         })
 
-                        # enable volt/var curve
-                        eut.volt_var(params={
-                            'Ena': True,
-                            'ActCrv': 1
-                        })
-
-                        ts.log('EUT VV settings: %s' % eut.volt_var())
+                        # enable volt/var curve and verify
+                        eut.volt_var(params={'ActCrv': 1, 'Ena': True})
+                        parameters = eut.volt_var()
+                        ts.log_debug('EUT VV settings (readback): %s' % parameters)
+                        if parameters['Ena'] == False:
+                            ts.log_debug('Could not enable the VV function. Trying again in 3 seconds.')
+                            ts.sleep(3)
+                            eut.volt_var(params={'Ena': True})
+                            parameters = eut.volt_var()
+                            ts.log_debug('EUT VV settings (readback): %s' % parameters)
+                            if parameters['Ena'] == False:
+                                ts.log_error('VV function is not enabled!')
+                            else:
+                                ts.log('VV function enabled. Proceeding with the test...')
 
                 for level in power_levels:
                     power = level[0]
                     # set input power level
                     ts.log('    Setting the input power of the PV simulator to %0.2f' % (p_max * power))
                     pv.power_set(p_max * power)
-
-                    ### adjust q_points based on power priority and power level
 
                     count = level[1]
                     for i in xrange(1, count + 1):
@@ -570,46 +604,106 @@ def test_run():
                             for p in range(len(v_test_points)):
                                 v_target = v_test_points[p]
                                 q_target = q_test_points[p]
-                                ts.log('        Setting the grid voltage to %0.2f and waiting %0.1f seconds.' %
-                                       (v_target, settling_time))
+                                ts.log('        Setting the grid voltage to %0.2f and waiting %0.1f seconds. '
+                                       'Q_targ = %s' % (v_target, settling_time, q_target))
                                 grid.voltage(v_target/v_nom * v_nom_grid)
                                 # capture a data sample with trigger enabled
                                 ts.sleep(settling_time)
                                 # get last voltage reading
                                 daq.data_sample()
                                 data = daq.data_capture_read()
-                                v_act = data.get('AC_VRMS_1')
-                                q_act = data.get('AC_Q_1')
+
+                                # Collect data from the end of the settling time
+                                v_act = [data.get('AC_VRMS_1')]
+                                q_act = [data.get('AC_Q_1')]
+                                p_act = [data.get('AC_P_1')]
+                                if phases != 'Single Phase':
+                                    v_act.append(data.get('AC_VRMS_2'))
+                                    v_act.append(data.get('AC_VRMS_3'))
+                                    q_act.append(data.get('AC_Q_2'))
+                                    q_act.append(data.get('AC_Q_3'))
+                                    p_act.append(data.get('AC_P_2'))
+                                    p_act.append(data.get('AC_P_3'))
                                 if v_act is None or q_act is None:
                                     ts.fail('Could not get data to record target information')
-                                q_target, q_min, q_max = q_msa_range(v_act, v_msa, var_msa, tests[test][0],
-                                                                     tests[test][1])
-                                daq.sc['V_ACT'] = v_act
-                                daq.sc['Q_ACT'] = q_act
-                                daq.sc['V_TARGET'] = v_target
-                                daq.sc['Q_TARGET'] = q_target
-                                daq.sc['Q_MIN'] = q_min
-                                daq.sc['Q_MAX'] = q_max
-                                daq.sc['Q_MIN_ERROR'] = abs(q_target - q_min)
-                                daq.sc['Q_MAX_ERROR'] = abs(q_max - q_target)
-                                daq.data_sample()
-                                daq.sc['V_ACT'] = ''
-                                daq.sc['Q_ACT'] = ''
-                                daq.sc['V_TARGET'] = ''
-                                daq.sc['Q_TARGET'] = ''
-                                daq.sc['Q_MIN'] = ''
-                                daq.sc['Q_MAX'] = ''
-                                daq.sc['Q_MIN_ERROR'] = ''
-                                daq.sc['Q_MAX_ERROR'] = ''
 
-                                # perform pass/fall on current target
-                                passfail = test_pass_fail(var_act=q_act, var_min=q_min, var_max=q_max)
-                                if passfail == 'Fail':
-                                    test_passfail = passfail
-                                    result = script.RESULT_FAIL
+                                # prepare pass/fail data
+                                passfail = [None, None, None]
+                                q_target = [0., 0., 0.]
+                                q_min = [0., 0., 0.]
+                                q_max = [0., 0., 0.]
+                                var_aval = [var_rated/3., var_rated/3., var_rated/3.]
+
+                                if priority == 'Active':
+                                    # In the case of watt priority, calculate the available reactive power per phase
+                                    if phases == 'Single Phase':
+                                        var_aval = [math.sqrt(max([((s_rated/3.)**2)-(p_act[0]**2), 0.]))]
+                                    else:
+                                        var_aval = [math.sqrt(max([((s_rated/3.)**2)-(p_act[0]**2), 0.])),
+                                                    math.sqrt(max([((s_rated/3.)**2)-(p_act[1]**2), 0.])),
+                                                    math.sqrt(max([((s_rated/3.)**2)-(p_act[2]**2), 0.]))]
+                                # Calculate the target reactive power for each phase and save them to the soft channels
+                                for ph in range(len(v_act)):  # for each phase
+                                    ph_val = ph + 1  # phase names start at 1 (not zero)
+                                    q_target[ph], q_min[ph], q_max[ph] = q_msa_range(v_act[ph], v_msa, var_msa,
+                                                                                     tests[test][0], tests[test][1])
+
+                                    # For 3-phase inverters, the reactive power is spread across all 3 phases
+                                    if phases != 'Single Phase':
+                                        q_target[ph] = q_target[ph]/3.
+                                        q_min[ph] = q_min[ph]/3.
+                                        q_max[ph] = q_max[ph]/3.
+
+                                    daq.sc['V_ACT_%i' % ph_val] = v_act[ph]
+                                    daq.sc['Q_ACT_%i' % ph_val] = q_act[ph]
+                                    daq.sc['V_TARGET_%i' % ph_val] = v_target
+                                    daq.sc['Q_TARGET_%i' % ph_val] = q_target[ph]
+                                    daq.sc['Q_MIN_%i' % ph_val] = q_min[ph]
+                                    daq.sc['Q_MAX_%i' % ph_val] = q_max[ph]
+                                    daq.sc['Q_MIN_ERROR_%i' % ph_val] = abs(q_target[ph] - q_min[ph])
+                                    daq.sc['Q_MAX_ERROR_%i' % ph_val] = abs(q_max[ph] - q_target[ph])
+
+                                    # perform pass/fall on current voltage target and phase
+                                    if priority == 'Reactive':
+                                        passfail[ph] = test_pass_fail(var_act=q_act[ph], var_min=q_min[ph],
+                                                                      var_max=q_max[ph])
+                                    else:
+                                        passfail[ph] = test_pass_fail(var_act=q_act[ph], var_min=q_min[ph],
+                                                                      var_max=q_max[ph], var_aval=var_aval[ph],
+                                                                      q_msa=var_msa, priority=priority)
+                                    if passfail[ph] == 'Fail':
+                                        test_passfail = 'Fail'
+                                        result = script.RESULT_FAIL
+
+                                # Ensure that 1 data entry includes the soft channel data.
+                                daq.data_sample()
+
+                                # Clear soft channel data. Hopefully only 1 data entry will include the soft
+                                # channel data, but it's not guaranteed
+                                for ph in range(len(v_act)):  # for each phase
+                                    ph_val = ph + 1  # phase names start at 1 (not zero)
+                                    daq.sc['V_ACT_%i' % ph_val] = ''
+                                    daq.sc['Q_ACT_%i' % ph_val] = ''
+                                    daq.sc['V_TARGET_%i' % ph_val] = ''
+                                    daq.sc['Q_TARGET_%i' % ph_val] = ''
+                                    daq.sc['Q_MIN_%i' % ph_val] = ''
+                                    daq.sc['Q_MAX_%i' % ph_val] = ''
+                                    daq.sc['Q_MIN_ERROR_%i' % ph_val] = ''
+                                    daq.sc['Q_MAX_ERROR_%i' % ph_val] = ''
+
+                                # create result summary entry of the final measurements and pass/fail results
                                 if result_summary is not None:
-                                    result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s\n' %
-                                                         ('', '', '', '', '', '', '', passfail, q_act, q_target, q_min, q_max))
+                                    if phases == 'Single Phase':
+                                        result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s\n' %
+                                                             ('', '', '', '', '', '', '',
+                                                              passfail[0], q_act[0], q_target[0], q_min[0], q_max[0]))
+                                    else:
+                                        result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '
+                                                             '%s, %s, %s, %s, %s, %s, %s, %s, %s\n' %
+                                                             ('', '', '', '', '', '', '',
+                                                              passfail[0], q_act[0], q_target[0], q_min[0], q_max[0],
+                                                              passfail[1], q_act[1], q_target[1], q_min[1], q_max[1],
+                                                              passfail[2], q_act[2], q_target[2], q_min[2], q_max[2]))
 
                             # stop capture and save
                             daq.data_capture(False)
@@ -620,9 +714,16 @@ def test_run():
                             ts.log('Saving data capture')
 
                             if result_summary is not None:
-                                result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s\n' %
-                                                     (test_passfail, test_str, priority, power*100., count,
-                                                      var_msa, filename, '', '', '', '', ''))
+                                if phases == 'Single Phase':
+                                    result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s\n' %
+                                                         (test_passfail, test_str, priority, power*100., count,
+                                                          var_msa, filename, '', '', '', '', ''))
+                                else:
+                                    result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '
+                                                         '%s, %s, %s, %s, %s, %s, %s, %s, %s\n' %
+                                                         (test_passfail, test_str, priority, power*100., count,
+                                                          var_msa, filename, '', '', '', '', '', '', '', '', '',
+                                                          '', '', '', '', '', ''))
 
                         '''
                         9) Repeat test Steps (6) - (8) at power levels of 20 and 66%; as described by the following:
@@ -648,15 +749,15 @@ def test_run():
             ts.log_error(reason)
     finally:
 
-        # return voltage and power level to normal
-        grid.voltage(v_nom_grid)
-        pv.power_set(p_max)
-
         if daq is not None:
             daq.close()
         if pv is not None:
+            if p_max is not None:
+                pv.power_set(p_max)
             pv.close()
         if grid is not None:
+            if v_nom_grid is not None:
+                grid.voltage(v_nom_grid)
             grid.close()
         if chil is not None:
             chil.close()
@@ -723,24 +824,26 @@ info.param('srd.vv_p_max_pct', label='Maximum tested output power (% of nameplat
 info.param('srd.vv_k_var_min', label='Minimum slope (Var/V)', default=0.0)
 info.param('srd.vv_segment_point_count', label='Measurement points per curve segment', default=3)
 
-info.param_group('eut', label='EUT Parameters', glob=True)
-info.param('eut.s_rated', label='Apparent power rating (VA)', default=0.0)
-info.param('eut.p_rated', label='Output power rating (W)', default=0.0)
-info.param('eut.var_rated', label='Output var rating (vars)', default=0.0)
-info.param('eut.v_nom', label='Nominal AC voltage (V)', default=0.0, desc='Nominal voltage for the AC simulator.')
-info.param('eut.v_min', label='Minimum AC voltage (V)', default=0.0)
-info.param('eut.v_max', label='Maximum AC voltage (V)', default=0.0)
-info.param('eut.v_msa', label='AC voltage manufacturers stated accuracy (V)', default=0.0)
-info.param('eut.var_msa', label='Reactive power manufacturers stated accuracy (Var)', default=0.0)
+info.param_group('eut_vv', label='EUT VV Parameters', glob=True)
+info.param('eut_vv.s_rated', label='Apparent power rating (VA)', default=0.0)
+info.param('eut_vv.p_rated', label='Output power rating (W)', default=0.0)
+info.param('eut_vv.var_rated', label='Output var rating (vars)', default=0.0)
+info.param('eut_vv.v_nom', label='Nominal AC voltage (V)', default=0.0, desc='Nominal voltage for the AC simulator.')
+info.param('eut_vv.v_min', label='Minimum AC voltage (V)', default=0.0)
+info.param('eut_vv.v_max', label='Maximum AC voltage (V)', default=0.0)
+info.param('eut_vv.v_msa', label='AC voltage manufacturers stated accuracy (V)', default=0.0)
+info.param('eut_vv.var_msa', label='Reactive power manufacturers stated accuracy (Var)', default=0.0)
 
-info.param('eut.var_ramp_max', label='Maximum ramp rate', default=0.0)
-info.param('eut.q_max_over', label='Maximum reactive power production (over-excited) (Var)', default=0.0)
-info.param('eut.q_max_under', label='Maximum reactive power absorbtion (under-excited) (Var)(-)', default=0.0)
-info.param('eut.k_var_max', label='Maximum slope (Var/V)', default=0.0)
-info.param('eut.vv_deadband_min', label='Deadband minimum range (V)', default=0.0)
-info.param('eut.vv_deadband_max', label='Deadband maximum range (V)', default=0.0)
-info.param('eut.vv_t_settling', label='Settling time (t)', default=0.0)
+info.param('eut_vv.var_ramp_max', label='Maximum ramp rate (VAr/s)', default=0.0)
+info.param('eut_vv.q_max_over', label='Maximum reactive power production (over-excited) (VAr)', default=0.0)
+info.param('eut_vv.q_max_under', label='Maximum reactive power absorbtion (under-excited) (VAr)(-)', default=0.0)
+info.param('eut_vv.k_var_max', label='Maximum slope (VAr/V)', default=0.0)
+info.param('eut_vv.vv_deadband_min', label='Deadband minimum range (V)', default=0.0)
+info.param('eut_vv.vv_deadband_max', label='Deadband maximum range (V)', default=0.0)
+info.param('eut_vv.vv_t_settling', label='Settling time (t)', default=0.0)
 
+info.param('eut_vv.phases', label='Phases', default='Single Phase', values=['Single Phase', '3-Phase 3-Wire',
+                                                                         '3-Phase 4-Wire'])
 der.params(info)
 gridsim.params(info)
 pvsim.params(info)

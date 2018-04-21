@@ -109,6 +109,7 @@ def test_run():
     eut = None
     rs = None
     chil = None
+    result_summary = None
 
     sc_points = ['PF_TARGET', 'PF_MAX', 'PF_MIN']
 
@@ -165,6 +166,9 @@ def test_run():
         eut = der.der_init(ts)
         if eut is not None:
             eut.config()
+
+        # disable volt/var curve
+        eut.volt_var(params={'Ena': False})
 
         '''
         4) Select 'Fixed Power Factor' operational mode.
@@ -224,9 +228,12 @@ def test_run():
                     daq.sc['PF_MAX'] = pf_upper
                     daq.sc['PF_MIN'] = pf_lower
                     if eut is not None:
-                        eut.fixed_pf(params={'Ena': True, 'PF': 1.0})
+                        if chil is not None:
+                            eut.fixed_pf(params={'Ena': True, 'PF': 100})  # HACK for ASGC - To be fixed in firmware
+                        else:
+                            eut.fixed_pf(params={'Ena': True, 'PF': 1.0})
                         pf_setting = eut.fixed_pf()
-                        ts.log('PF setting: %s' % (pf_setting))
+                        ts.log('PF setting read: %s' % (pf_setting))
                     ts.log('Starting data capture for pf = %s' % (1.0))
                     daq.data_capture(True)
                     ts.log('Sampling for %s seconds' % (pf_settling_time * 3))
@@ -276,12 +283,14 @@ def test_run():
                     daq.sc['PF_MAX'] = pf_upper
                     daq.sc['PF_MIN'] = pf_lower
                     if eut is not None:
-                        parameters = {'Ena': True, 'PF': pf}
+                        if chil is not None:
+                            parameters = {'Ena': True, 'PF': pf*100}  # HACK for ASGC - To be fixed in their firmware
+                        else:
+                            parameters = {'Ena': True, 'PF': pf}
                         ts.log('PF set: %s' % (parameters))
                         eut.fixed_pf(params=parameters)
-                        ts.log('PF set exit: %s' % (parameters))
                         pf_setting = eut.fixed_pf()
-                        ts.log('PF setting: %s' % (pf_setting))
+                        ts.log('PF setting read: %s' % (pf_setting))
                     ts.log('Starting data capture for pf = %s' % (pf))
                     daq.data_capture(True)
                     ts.log('Sampling for %s seconds' % (pf_settling_time * 3))
@@ -361,6 +370,9 @@ def test_run():
             rs.close()
         if chil is not None:
             chil.close()
+
+        if result_summary is not None:
+            result_summary.close()
 
         # create result workbook
         excelfile = ts.config_name() + '.xlsx'

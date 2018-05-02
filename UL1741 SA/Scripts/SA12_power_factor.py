@@ -41,6 +41,7 @@ from svpelab import der
 from svpelab import hil
 import script
 from svpelab import result as rslt
+import numpy as np
 
 def test_pass_fail(pf_act=[], pf_target=None, pf_msa=None):
 
@@ -98,6 +99,26 @@ def test_pass_fail(pf_act=[], pf_target=None, pf_msa=None):
                 break
 
     return pass_fail, pf_lower, pf_upper
+
+
+def get_last_point_from_dataset(ds=None, point_list=None, list_idx=0):
+    """
+    Returns the last data point for a given dataset and data point name
+
+    ds: dataset
+    point_list: list of data names, e.g., ['AC_PF_1', 'AC_PF_2', 'AC_PF_3']
+    list_idx: phase index for the point to get the last data from
+    """
+    try:
+        idx = ds.points.index(point_list[list_idx])  # get the data index
+        data = ds.data[idx]  # get the data
+        if len(data) <= 0:
+            ts.fail('No data for data point %s' % (point_list[list_idx]))
+        elif len(data) <= 0:
+            ts.fail('No data for data point %s' % (point_list[list_idx]))
+        return float(data[-1])  # use the last measurement for the pass/fail check
+    except ValueError, e:
+        ts.fail('Data point %s not in dataset: %s' % (point_list[list_idx], e))
 
 
 def test_run():
@@ -202,10 +223,14 @@ def test_run():
         ts.result_file(result_summary_filename)
         if phases == 'Single Phase':
             result_summary.write('Result, Test Name, Power Level (%), Iteration, PF Actual, PF Target, '
-                                 'PF MSA, PF Min Allowed, PF Max Allowed, Dataset File\n')
+                                 'PF MSA, PF Min Allowed, PF Max Allowed, Dataset File'
+                                 'Power (pu), Reactive Power (pu), P Target at Rated (pu), Q Target at Rated (pu)\n')
         else:
             result_summary.write('Result, Test Name, Power Level (%), Iteration, PF Actual 1, PF Actual 2, PF Actual 3,'
-                                 'PF Target, PF MSA, PF Min Allowed, PF Max Allowed, Dataset File\n')
+                                 'PF Target, PF MSA, PF Min Allowed, PF Max Allowed, Dataset File,'
+                                 'Power 1 (pu), Power 2 (pu), Power 3 (pu), '
+                                 'Reactive Power 1 (pu), Reactive Power 2 (pu), Reactive Power 3 (pu), '
+                                 'P Target at Rated (pu), Q Target at Rated (pu) \n')
 
         for pf in pf_targets:
             for power_level in power_levels:
@@ -248,30 +273,40 @@ def test_run():
 
                     # create result summary entry
                     pf_points = ['AC_PF_1']
+                    va_points = ['AC_S_1']
                     if phases != 'Single Phase':
                         pf_points.append('AC_PF_2')
                         pf_points.append('AC_PF_3')
+                        va_points.append('AC_S_2')
+                        va_points.append('AC_S_3')
                     pf_act = []
+                    va_act = []
+                    p_act = [0]*len(pf_points)  # Used for plotting results on P-Q plane
+                    q_act = [0]*len(pf_points)  # Used for plotting results on P-Q plane
+                    va_nameplate_per_phase = p_rated/len(pf_points)  # assume VA_nameplate and P_rated are the same
+
                     for ph in range(len(pf_points)):  # for each phase...
-                        try:
-                            idx = ds.points.index(pf_points[ph])  # get the data index
-                            pf_data = ds.data[idx]  # get the data
-                            if len(pf_data) <= 0:
-                                ts.fail('No data for data point %s' % (pf_points[ph]))
-                            # use the last PF measurement for the pass/fail check
-                            pf_act.append(float(pf_data[-1]))
-                        except ValueError, e:
-                            ts.fail('Data point %s not in dataset' % (pf_points[ph]))
+                        pf_act.append(get_last_point_from_dataset(ds=ds, point_list=pf_points, list_idx=ph))
+                        va_act.append(get_last_point_from_dataset(ds=ds, point_list=va_points, list_idx=ph))
+                        p_act[ph] = (va_act[ph]/va_nameplate_per_phase)*pf_act[ph]
+                        q_act[ph] = (va_act[ph]/va_nameplate_per_phase)*-np.sin(np.arccos(pf_act[ph]))
+
+                    p_target_at_rated = 1.0
+                    q_target_at_rated = 0.0
 
                     passfail, pf_lower, pf_upper = test_pass_fail(pf_act=pf_act, pf_target=1.0, pf_msa=pf_msa)
                     if phases == 'Single Phase':
-                        result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s\n' %
+                        result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s\n' %
                                              (passfail, ts.config_name(), power * 100, count, pf_act[0], 1.0, pf_msa,
-                                              pf_lower, pf_upper, filename))
+                                              pf_lower, pf_upper, filename, p_act[0], q_act[0],
+                                              p_target_at_rated, q_target_at_rated))
                     else:
-                        result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s\n' %
+                        result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'
+                                             '%s, %s\n' %
                                              (passfail, ts.config_name(), power * 100, count, pf_act[0],
-                                              pf_act[1], pf_act[2], 1.0, pf_msa, pf_lower, pf_upper, filename))
+                                              pf_act[1], pf_act[2], 1.0, pf_msa, pf_lower, pf_upper, filename,
+                                              p_act[0], p_act[1], p_act[2], q_act[0], q_act[1], q_act[2],
+                                              p_target_at_rated, q_target_at_rated))
 
                     '''
                     7) Set the EUT power factor to the value in Test 1 of Table SA12.1. Measure the AC source voltage
@@ -306,31 +341,34 @@ def test_run():
                     ts.log('Saving data capture %s' % (filename))
 
                     # create result summary entry
-                    pf_points = ['AC_PF_1']
-                    if phases != 'Single Phase':
-                        pf_points.append('AC_PF_2')
-                        pf_points.append('AC_PF_3')
                     pf_act = []
+                    va_act = []
+                    p_act = [0]*len(pf_points)  # Used for plotting results on P-Q plane
+                    q_act = [0]*len(pf_points)  # Used for plotting results on P-Q plane
+                    va_nameplate_per_phase = p_rated/len(pf_points)  # assume VA_nameplate and P_rated are the same
+
                     for ph in range(len(pf_points)):  # for each phase...
-                        try:
-                            idx = ds.points.index(pf_points[ph])  # get the data index
-                            pf_data = ds.data[idx]  # get the data
-                            if len(pf_data) <= 0:
-                                ts.fail('No data for data point %s' % (pf_points[ph]))
-                            # use the last PF measurement for the pass/fail check
-                            pf_act.append(float(pf_data[-1]))
-                        except ValueError, e:
-                            ts.fail('Data point %s not in dataset' % (pf_points[ph]))
+                        pf_act.append(get_last_point_from_dataset(ds=ds, point_list=pf_points, list_idx=ph))
+                        va_act.append(get_last_point_from_dataset(ds=ds, point_list=va_points, list_idx=ph))
+                        p_act[ph] = (va_act[ph]/va_nameplate_per_phase)*pf_act[ph]
+                        q_act[ph] = (va_act[ph]/va_nameplate_per_phase)*-np.sin(np.arccos(pf_act[ph]))
+
+                    p_target_at_rated = pf
+                    q_target_at_rated = -np.sin(np.arccos(pf))
 
                     passfail, pf_lower, pf_upper = test_pass_fail(pf_act=pf_act, pf_target=pf, pf_msa=pf_msa)
                     if phases == 'Single Phase':
-                        result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s\n' %
+                        result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s\n' %
                                              (passfail, ts.config_name(), power * 100, count, pf_act[0], pf, pf_msa,
-                                              pf_lower, pf_upper, filename))
+                                              pf_lower, pf_upper, filename, p_act[0], q_act[0],
+                                              p_target_at_rated, q_target_at_rated))
                     else:
-                        result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s\n' %
+                        result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'
+                                             '%s, %s\n' %
                                              (passfail, ts.config_name(), power * 100, count, pf_act[0],
-                                              pf_act[1], pf_act[2], pf, pf_msa, pf_lower, pf_upper, filename))
+                                              pf_act[1], pf_act[2], pf, pf_msa, pf_lower, pf_upper, filename,
+                                              p_act[0], p_act[1], p_act[2], q_act[0], q_act[1], q_act[2],
+                                              p_target_at_rated, q_target_at_rated))
 
                     '''
                     8) Repeat steps (6) - (8) for two additional times for a total of three repetitions.

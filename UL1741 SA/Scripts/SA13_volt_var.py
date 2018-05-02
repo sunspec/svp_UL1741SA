@@ -42,6 +42,7 @@ from svpelab import hil
 import script
 import math
 import result as rslt
+import numpy as np
 
 test_labels = {
     1: 'Test 1 - Most Aggressive',
@@ -224,15 +225,15 @@ def test_run():
         phases = ts.param_value('eut_vv.phases')
 
         if phases == 'Single Phase':
-            sc_points = ['V_ACT_1', 'Q_ACT_1', 'V_TARGET_1', 'Q_TARGET_1', 'Q_MIN_1', 'Q_MAX_1', 'Q_MIN_ERROR_1',
-                         'Q_MAX_ERROR_1']
+            sc_points = ['V_ACT_1', 'Q_ACT_1',  # 'V_ACT_PU_1', 'Q_ACT_PU_1',
+                         'V_TARGET_1', 'Q_TARGET_1', 'Q_MIN_1', 'Q_MAX_1', 'Q_MIN_ERROR_1', 'Q_MAX_ERROR_1']
         else:
-            sc_points = ['V_ACT_1', 'Q_ACT_1', 'V_TARGET_1', 'Q_TARGET_1', 'Q_MIN_1', 'Q_MAX_1', 'Q_MIN_ERROR_1',
-                         'Q_MAX_ERROR_1',
-                         'V_ACT_2', 'Q_ACT_2', 'V_TARGET_2', 'Q_TARGET_2', 'Q_MIN_2', 'Q_MAX_2', 'Q_MIN_ERROR_2',
-                         'Q_MAX_ERROR_2',
-                         'V_ACT_3', 'Q_ACT_3', 'V_TARGET_3', 'Q_TARGET_3', 'Q_MIN_3', 'Q_MAX_3', 'Q_MIN_ERROR_3',
-                         'Q_MAX_ERROR_3']
+            sc_points = ['V_ACT_1', 'Q_ACT_1',  # 'V_ACT_PU_1', 'Q_ACT_PU_1',
+                         'V_TARGET_1', 'Q_TARGET_1', 'Q_MIN_1', 'Q_MAX_1', 'Q_MIN_ERROR_1', 'Q_MAX_ERROR_1',
+                         'V_ACT_2', 'Q_ACT_2',  # 'V_ACT_PU_2', 'Q_ACT_PU_2',
+                         'V_TARGET_2', 'Q_TARGET_2', 'Q_MIN_2', 'Q_MAX_2', 'Q_MIN_ERROR_2', 'Q_MAX_ERROR_2',
+                         'V_ACT_3', 'Q_ACT_3',  # 'V_ACT_PU_3', 'Q_ACT_PU_3',
+                         'V_TARGET_3', 'Q_TARGET_3', 'Q_MIN_3', 'Q_MAX_3', 'Q_MIN_ERROR_3', 'Q_MAX_ERROR_3']
 
         p_min_pct = ts.param_value('srd.vv_p_min_pct')
         p_max_pct = ts.param_value('srd.vv_p_max_pct')
@@ -359,8 +360,8 @@ def test_run():
             q[5] = q_min_under
             v = [0] * 6
             v[0] = v_min
-            v[2] = v_nom - deadband_min/2
-            v[3] = v_nom + deadband_min/2
+            v[2] = v_nom - deadband_max/2
+            v[3] = v_nom + deadband_max/2
             if k_var_min == 0:
                 v[1] = 0.99*v[2]
                 v[4] = 1.01*v[3]
@@ -444,6 +445,8 @@ def test_run():
             ph_val = ph + 1  # phase names start at 1 (not zero)
             daq.sc['V_ACT_%i' % ph_val] = ''
             daq.sc['Q_ACT_%i' % ph_val] = ''
+            # daq.sc['V_ACT_PU_%i' % ph_val] = ''
+            # daq.sc['Q_ACT_PU_%i' % ph_val] = ''
             daq.sc['V_TARGET_%i' % ph_val] = ''
             daq.sc['Q_TARGET_%i' % ph_val] = ''
             daq.sc['Q_MIN_%i' % ph_val] = ''
@@ -469,12 +472,14 @@ def test_run():
         ts.result_file(result_summary_filename)
         if n_phase == 1:
             result_summary.write('Result, Test Name, Power Priority, Power Level, Iteration, Var MSA, Dataset File,'
-                                 'Point Result, Var Actual, Var Target, Var Min Allowed, Var Max Allowed\n')
+                                 'Point Result, Var Actual, Var Target, Var Min Allowed, Var Max Allowed,'
+                                 'Voltage (pu), Total Reactive Power (pu)\n')
         else:
             result_summary.write('Result, Test Name, Power Priority, Power Level, Iteration, Var MSA, Dataset File,'
                                  'Point Result 1, Var Actual 1, Var Target 1, Var Min Allowed 1, Var Max Allowed 1,'
                                  'Point Result 2, Var Actual 2, Var Target 2, Var Min Allowed 2, Var Max Allowed 2,'
-                                 'Point Result 3, Var Actual 3, Var Target 3, Var Min Allowed 3, Var Max Allowed 3\n')
+                                 'Point Result 3, Var Actual 3, Var Target 3, Var Min Allowed 3, Var Max Allowed 3,'
+                                 'Average Voltage (pu), Total Reactive Power (pu)\n')
 
         for priority in power_priorities:
             '''
@@ -632,6 +637,8 @@ def test_run():
                                 q_target = [0., 0., 0.]
                                 q_min = [0., 0., 0.]
                                 q_max = [0., 0., 0.]
+                                # v_act_pu = [0., 0., 0.]
+                                # q_act_pu = [0., 0., 0.]
                                 var_aval = [var_rated/3., var_rated/3., var_rated/3.]
 
                                 if priority == 'Active':
@@ -656,6 +663,8 @@ def test_run():
 
                                     daq.sc['V_ACT_%i' % ph_val] = v_act[ph]
                                     daq.sc['Q_ACT_%i' % ph_val] = q_act[ph]
+                                    # daq.sc['V_ACT_PU_%i' % ph_val] = v_act_pu[ph]
+                                    # daq.sc['Q_ACT_PU_%i' % ph_val] = q_act_pu
                                     daq.sc['V_TARGET_%i' % ph_val] = v_target
                                     daq.sc['Q_TARGET_%i' % ph_val] = q_target[ph]
                                     daq.sc['Q_MIN_%i' % ph_val] = q_min[ph]
@@ -675,6 +684,8 @@ def test_run():
                                         test_passfail = 'Fail'
                                         result = script.RESULT_FAIL
 
+                                    ts.sleep(0.05)  # insert small sleep so the test/suite can be stopped.
+
                                 # Ensure that 1 data entry includes the soft channel data.
                                 daq.data_sample()
 
@@ -684,6 +695,8 @@ def test_run():
                                     ph_val = ph + 1  # phase names start at 1 (not zero)
                                     daq.sc['V_ACT_%i' % ph_val] = ''
                                     daq.sc['Q_ACT_%i' % ph_val] = ''
+                                    # daq.sc['V_ACT_PU_%i' % ph_val] = ''
+                                    # daq.sc['Q_ACT_PU_%i' % ph_val] = ''
                                     daq.sc['V_TARGET_%i' % ph_val] = ''
                                     daq.sc['Q_TARGET_%i' % ph_val] = ''
                                     daq.sc['Q_MIN_%i' % ph_val] = ''
@@ -691,19 +704,25 @@ def test_run():
                                     daq.sc['Q_MIN_ERROR_%i' % ph_val] = ''
                                     daq.sc['Q_MAX_ERROR_%i' % ph_val] = ''
 
+                                # For plotting purposes, collect the (V, Q) point for this test point
+                                v_act_pu = np.mean(v_act)/v_nom
+                                q_act_pu = sum(q_act)/q_max_over
+
                                 # create result summary entry of the final measurements and pass/fail results
                                 if result_summary is not None:
                                     if phases == 'Single Phase':
-                                        result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s\n' %
-                                                             ('', '', '', '', '', '', '',
-                                                              passfail[0], q_act[0], q_target[0], q_min[0], q_max[0]))
+                                        result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s\n'
+                                                             % ('', '', '', '', '', '', '',
+                                                                passfail[0], q_act[0], q_target[0], q_min[0], q_max[0],
+                                                                v_act_pu, q_act_pu))
                                     else:
-                                        result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '
-                                                             '%s, %s, %s, %s, %s, %s, %s, %s, %s\n' %
-                                                             ('', '', '', '', '', '', '',
-                                                              passfail[0], q_act[0], q_target[0], q_min[0], q_max[0],
-                                                              passfail[1], q_act[1], q_target[1], q_min[1], q_max[1],
-                                                              passfail[2], q_act[2], q_target[2], q_min[2], q_max[2]))
+                                        result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'
+                                                             '%s, %s, %s, %s, %s, %s, %s, %s, %s, %s \n'
+                                                             % ('', '', '', '', '', '', '',
+                                                                passfail[0], q_act[0], q_target[0], q_min[0], q_max[0],
+                                                                passfail[1], q_act[1], q_target[1], q_min[1], q_max[1],
+                                                                passfail[2], q_act[2], q_target[2], q_min[2], q_max[2],
+                                                                v_act_pu, q_act_pu))
 
                             # stop capture and save
                             daq.data_capture(False)

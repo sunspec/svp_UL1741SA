@@ -472,6 +472,7 @@ das.params(info)
 gridsim.params(info)
 loadsim.params(info)
 pvsim.params(info)
+hil.params(info)
 
 def script_info():
     

@@ -223,12 +223,12 @@ def test_run():
         ts.result_file(result_summary_filename)
         if phases == 'Single Phase':
             result_summary.write('Result, Test Name, Power Level (%), Iteration, PF Actual, PF Target, '
-                                 'PF MSA, PF Min Allowed, PF Max Allowed, Dataset File'
+                                 'PF MSA, PF Min Allowed, PF Max Allowed, Dataset File,'
                                  'Power (pu), Reactive Power (pu), P Target at Rated (pu), Q Target at Rated (pu)\n')
         else:
             result_summary.write('Result, Test Name, Power Level (%), Iteration, PF Actual 1, PF Actual 2, PF Actual 3,'
                                  'PF Target, PF MSA, PF Min Allowed, PF Max Allowed, Dataset File,'
-                                 'Power 1 (pu), Power 2 (pu), Power 3 (pu), '
+                                 'Power 1 (pu), Power 2 (pu), Power 3 (pu),'
                                  'Reactive Power 1 (pu), Reactive Power 2 (pu), Reactive Power 3 (pu), '
                                  'P Target at Rated (pu), Q Target at Rated (pu) \n')
 

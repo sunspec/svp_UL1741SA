@@ -223,12 +223,12 @@ def test_run():
         ts.result_file(result_summary_filename)
         if phases == 'Single Phase':
             result_summary.write('Result, Test Name, Power Level (%), Iteration, PF Actual, PF Target, '
-                                 'PF MSA, PF Min Allowed, PF Max Allowed, Dataset File'
+                                 'PF MSA, PF Min Allowed, PF Max Allowed, Dataset File,'
                                  'Power (pu), Reactive Power (pu), P Target at Rated (pu), Q Target at Rated (pu)\n')
         else:
             result_summary.write('Result, Test Name, Power Level (%), Iteration, PF Actual 1, PF Actual 2, PF Actual 3,'
                                  'PF Target, PF MSA, PF Min Allowed, PF Max Allowed, Dataset File,'
-                                 'Power 1 (pu), Power 2 (pu), Power 3 (pu), '
+                                 'Power 1 (pu), Power 2 (pu), Power 3 (pu),'
                                  'Reactive Power 1 (pu), Reactive Power 2 (pu), Reactive Power 3 (pu), '
                                  'P Target at Rated (pu), Q Target at Rated (pu) \n')
 
@@ -274,22 +274,34 @@ def test_run():
                     # create result summary entry
                     pf_points = ['AC_PF_1']
                     va_points = ['AC_S_1']
+                    p_points = ['AC_P_1']
+                    q_points = ['AC_Q_1']
                     if phases != 'Single Phase':
                         pf_points.append('AC_PF_2')
                         pf_points.append('AC_PF_3')
                         va_points.append('AC_S_2')
                         va_points.append('AC_S_3')
+                        p_points.append('AC_P_2')
+                        p_points.append('AC_P_3')
+                        q_points.append('AC_Q_2')
+                        q_points.append('AC_Q_3')
                     pf_act = []
                     va_act = []
-                    p_act = [0]*len(pf_points)  # Used for plotting results on P-Q plane
-                    q_act = [0]*len(pf_points)  # Used for plotting results on P-Q plane
+                    p_act = []  # Used for plotting results on P-Q plane
+                    q_act = []  # Used for plotting results on P-Q plane
                     va_nameplate_per_phase = p_rated/len(pf_points)  # assume VA_nameplate and P_rated are the same
 
                     for ph in range(len(pf_points)):  # for each phase...
                         pf_act.append(get_last_point_from_dataset(ds=ds, point_list=pf_points, list_idx=ph))
                         va_act.append(get_last_point_from_dataset(ds=ds, point_list=va_points, list_idx=ph))
-                        p_act[ph] = (va_act[ph]/va_nameplate_per_phase)*pf_act[ph]
-                        q_act[ph] = (va_act[ph]/va_nameplate_per_phase)*-np.sin(np.arccos(pf_act[ph]))
+                        # p_act[ph] = (va_act[ph]/va_nameplate_per_phase)*pf_act[ph]
+                        # q_act[ph] = (va_act[ph]/va_nameplate_per_phase)*-np.sin(np.arccos(pf_act[ph]))
+                        # this only produces negative reactive power values because sin(arccos(x)) is positive in [-1,1]
+                        # if this method is to be used pulling the sign off the reactive power is necessary.
+                        p_act.append(get_last_point_from_dataset(ds=ds, point_list=p_points, list_idx=ph)
+                                     /va_nameplate_per_phase)  # in pu
+                        q_act.append(get_last_point_from_dataset(ds=ds, point_list=q_points, list_idx=ph)
+                                     /va_nameplate_per_phase)  # in pu
 
                     p_target_at_rated = 1.0
                     q_target_at_rated = 0.0
@@ -343,18 +355,23 @@ def test_run():
                     # create result summary entry
                     pf_act = []
                     va_act = []
-                    p_act = [0]*len(pf_points)  # Used for plotting results on P-Q plane
-                    q_act = [0]*len(pf_points)  # Used for plotting results on P-Q plane
+                    p_act = []  # Used for plotting results on P-Q plane
+                    q_act = []  # Used for plotting results on P-Q plane
                     va_nameplate_per_phase = p_rated/len(pf_points)  # assume VA_nameplate and P_rated are the same
 
                     for ph in range(len(pf_points)):  # for each phase...
                         pf_act.append(get_last_point_from_dataset(ds=ds, point_list=pf_points, list_idx=ph))
                         va_act.append(get_last_point_from_dataset(ds=ds, point_list=va_points, list_idx=ph))
-                        p_act[ph] = (va_act[ph]/va_nameplate_per_phase)*pf_act[ph]
-                        q_act[ph] = (va_act[ph]/va_nameplate_per_phase)*-np.sin(np.arccos(pf_act[ph]))
+                        p_act.append(get_last_point_from_dataset(ds=ds, point_list=p_points, list_idx=ph)
+                                     /va_nameplate_per_phase)  # in pu
+                        q_act.append(get_last_point_from_dataset(ds=ds, point_list=q_points, list_idx=ph)
+                                     /va_nameplate_per_phase)  # in pu
 
-                    p_target_at_rated = pf
-                    q_target_at_rated = -np.sin(np.arccos(pf))
+                    p_target_at_rated = np.fabs(pf)
+                    if pf < 0:
+                        q_target_at_rated = np.sin(np.arccos(pf))  # PF < 0, +Q
+                    else:
+                        q_target_at_rated = -np.sin(np.arccos(pf))  # PF > 0, -Q
 
                     passfail, pf_lower, pf_upper = test_pass_fail(pf_act=pf_act, pf_target=pf, pf_msa=pf_msa)
                     if phases == 'Single Phase':

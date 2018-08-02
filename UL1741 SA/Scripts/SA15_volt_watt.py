@@ -262,6 +262,7 @@ def test_run():
 
             # Update hysteresis parameters
             for hys in hyst:
+                v_stop = v_start  # when there is no hysteresis, this will define the test points
                 if hys and vw_curve == 1:
                     k_power_rate = k_p_rate_max
                     v_stop = v_stop_min

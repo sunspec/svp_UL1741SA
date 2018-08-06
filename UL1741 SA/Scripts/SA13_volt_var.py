@@ -183,7 +183,7 @@ def test_run():
     p_max = None
     v_nom_grid = None
 
-    result_params={
+    result_params = {
         'plot.title': 'title_name',
         'plot.x.title': 'Time (secs)',
         'plot.x.points': 'TIME',
@@ -784,9 +784,9 @@ def test_run():
             result_summary.close()
 
         # create result workbook
-        file = ts.config_name() + '.xlsx'
-        rslt.result_workbook(file, ts.results_dir(), ts.result_dir())
-        ts.result_file(file)
+        xlsxfile = ts.config_name() + '.xlsx'
+        rslt.result_workbook(xlsxfile, ts.results_dir(), ts.result_dir())
+        ts.result_file(xlsxfile)
 
     return result
 

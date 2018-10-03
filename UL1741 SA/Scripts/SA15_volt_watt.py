@@ -35,6 +35,7 @@ from svpelab import der
 import numpy as np
 import time
 import script
+import result as rslt
 
 def p_target(v, v_nom, v_slope_start, v_slope_stop):
     """
@@ -129,7 +130,6 @@ def test_run():
 
     result = script.RESULT_FAIL
     daq = None
-    data = None
     grid = None
     pv = None
     eut = None
@@ -137,6 +137,19 @@ def test_run():
     p_max = None
     v_nom_grid = None
     result_summary = None
+
+    result_params = {
+        'plot.title': 'title_name',
+        'plot.x.title': 'Time (secs)',
+        'plot.x.points': 'TIME',
+        'plot.y.points': 'AC_VRMS_1, AC_P_1, P_target_pct',
+        'plot.AC_VRMS_1.point': 'True',
+        'plot.P_target_pct.point': 'True',
+        'plot.P_target_pct.min_error': 'P_min_pct',
+        'plot.P_target_pct.max_error': 'P_max_pct',
+        'plot.P_MIN.point': 'True',
+        'plot.P_MAX.point': 'True',
+    }
 
     try:
         """
@@ -206,7 +219,6 @@ def test_run():
         daq.sc['P_target_pct'] = 100
         daq.sc['P_min_pct'] = 0
         daq.sc['P_max_pct'] = 100
-
         daq.sc['event'] = 'None'
 
         """
@@ -262,6 +274,7 @@ def test_run():
 
             # Update hysteresis parameters
             for hys in hyst:
+                v_stop = v_start  # when there is no hysteresis, this will define the test points
                 if hys and vw_curve == 1:
                     k_power_rate = k_p_rate_max
                     v_stop = v_stop_min
@@ -324,7 +337,8 @@ def test_run():
                             daq.sc['P_min_pct'] = p_min_to_pass
                             daq.sc['P_max_pct'] = p_max_to_pass
 
-                            filename = 'VW_curve_%s_power=%0.2f_iter=%s.csv' % (vw_curve, power, n_iter+1)
+                            test_str = 'VW_curve_%s_power=%0.2f_iter=%s' % (vw_curve, power, n_iter+1)
+                            filename = test_str + '.csv'
                             daq.data_capture(True)
                             daq.sc['event'] = 'V_Step_Up'
                             grid.voltage(v_step)
@@ -343,7 +357,6 @@ def test_run():
                                                  (passfail, ts.config_name(), power * 100., n_iter + 1,
                                                   'Up', v_step, AC_W_pct, daq.sc['P_min_pct'],
                                                   daq.sc['P_max_pct'], filename))
-                            daq.data_capture(False)
 
                         for v_step in v_points_down:
                             '''
@@ -370,8 +383,8 @@ def test_run():
                             ts.log('        Recording power at voltage %0.3f V for 2*t_settling = %0.1f sec.' %
                                    (v_step, 2 * t_settling))
                             daq.sc['event'] = 'V_Step_Down'
-                            filename = 'VW_curve_%s_power=%0.2f_iter=%s.csv' % (vw_curve, power, n_iter+1)
-
+                            test_str = 'VW_curve_%s_power=%0.2f_iter=%s' % (vw_curve, power, n_iter+1)
+                            filename = test_str + '.csv'
                             if v_step > v_stop-1.5*MSA_V and hys:
                                 p_targ = 0.
                                 p_min_to_pass = -MSA_P
@@ -453,6 +466,11 @@ def test_run():
                                                   daq.sc['P_max_pct'], filename))
 
                             daq.data_capture(False)
+                            ds = daq.data_capture_dataset()
+                            ts.log('Saving file: %s' % filename)
+                            ds.to_csv(ts.result_file_path(filename))
+                            result_params['plot.title'] = test_str
+                            ts.result_file(filename, params=result_params)
 
         result = script.RESULT_COMPLETE
 
@@ -477,6 +495,11 @@ def test_run():
             eut.close()
         if result_summary is not None:
             result_summary.close()
+
+        # create result workbook
+        xlsxfile = ts.config_name() + '.xlsx'
+        rslt.result_workbook(xlsxfile, ts.results_dir(), ts.result_dir())
+        ts.result_file(xlsxfile)
 
     return result
 

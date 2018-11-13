@@ -32,10 +32,10 @@ from svpelab import gridsim
 from svpelab import pvsim
 from svpelab import das
 from svpelab import der
+from svpelab import result as rslt
 import numpy as np
 import time
 import script
-import result as rslt
 
 def p_target(v, v_nom, v_slope_start, v_slope_stop):
     """
@@ -54,7 +54,7 @@ def p_target(v, v_nom, v_slope_start, v_slope_stop):
     elif v_pct > v_slope_stop_pct:
         p_targ = 0.
     else:
-        p_targ = 100. - 100.*((v_pct-v_slope_start_pct)/(v_pct-v_slope_stop_pct))
+        p_targ = ((-100.)/(v_slope_stop_pct-v_slope_start_pct))*(v_pct-v_slope_start_pct)+100.
     return p_targ
 
 
@@ -72,8 +72,8 @@ def p_msa_range(v_value, v_msa, p_msa, v_nom, v_slope_start, v_slope_stop):
     :return: points for q_target, q_target_min, q_target_max
     """
     p_targ = p_target(v_value, v_nom, v_slope_start, v_slope_stop)    # target power for the voltage measurement
-    p1 = p_target(v_value - v_msa, v_nom, v_slope_start, v_slope_stop)  # power target from the lower voltage limit
-    p2 = p_target(v_value + v_msa, v_nom, v_slope_start, v_slope_stop)  # power target from the upper voltage limit
+    p1 = p_target(v_value - v_msa, v_nom, v_slope_start- v_msa, v_slope_stop- v_msa)  # power target from the lower voltage limit
+    p2 = p_target(v_value + v_msa, v_nom, v_slope_start+ v_msa, v_slope_stop+ v_msa)  # power target from the upper voltage limit
     if p1 >= p_target:
         # if the VW curve has a negative slope
         # add the power MSA to the high side (left point, p1)
@@ -130,12 +130,11 @@ def test_run():
 
     result = script.RESULT_FAIL
     daq = None
+    data = None
     grid = None
     pv = None
     eut = None
     chil = None
-    p_max = None
-    v_nom_grid = None
     result_summary = None
 
     result_params = {
@@ -202,12 +201,14 @@ def test_run():
         # initialize pv simulator
         pv = pvsim.pvsim_init(ts)
         p_rated = ts.param_value('vw.p_rated')
+        MSA_P_pct = (MSA_P/p_rated)*100
         pv.power_set(p_rated)
         pv.power_on()  # power on at p_rated
 
         # Configure the EUT communications
-        eut = der.der_init(ts)
-        eut.config()
+        if eut is not None:
+            eut = der.der_init(ts)
+            eut.config()
         # ts.log_debug(eut.measurements())
         ts.log_debug('If not done already, set L/HVRT and trip parameters to the widest range of adjustability.')
 
@@ -219,6 +220,7 @@ def test_run():
         daq.sc['P_target_pct'] = 100
         daq.sc['P_min_pct'] = 0
         daq.sc['P_max_pct'] = 100
+
         daq.sc['event'] = 'None'
 
         """
@@ -255,7 +257,8 @@ def test_run():
         """
         Test start
         """
-        ts.log_debug('Initial EUT VW settings are %s' % eut.volt_watt())
+        if eut is not None:
+            ts.log_debug('Initial EUT VW settings are %s' % eut.volt_watt())
         for vw_curve in vw_curves:
             if vw_curve == 1:  # characteristic curve 1
                 v_start = v_start_min
@@ -263,18 +266,19 @@ def test_run():
                 v_max_curve = v_start + 100./k_power_volt
                 vw_curve_params = {'v': [v_start, v_max_curve], 'w': [100., 0], 'DeptRef': 'W_MAX_PCT'}
                 vw_params = {'Ena': True, 'ActCrv': 1, 'curve': vw_curve_params}
-                eut.volt_watt(params=vw_params)
+                if eut is not None:
+                    eut.volt_watt(params=vw_params)
             else:  # characteristic curve 2
                 v_start = v_start_max
-                k_power_volt = k_p_slope_max
+                k_power_volt = k_p_slope_min
                 v_max_curve = v_start + 100./k_power_volt
                 vw_curve_params = {'v': [v_start, v_max_curve], 'w': [100., 0], 'DeptRef': 'W_MAX_PCT'}
                 vw_params = {'Ena': True, 'ActCrv': 1, 'curve': vw_curve_params}
-                eut.volt_watt(params=vw_params)
+                if eut is not None:
+                    eut.volt_watt(params=vw_params)
 
             # Update hysteresis parameters
             for hys in hyst:
-                v_stop = v_start  # when there is no hysteresis, this will define the test points
                 if hys and vw_curve == 1:
                     k_power_rate = k_p_rate_max
                     v_stop = v_stop_min
@@ -291,11 +295,12 @@ def test_run():
                     # eut.volt_watt(params=vw_hyst_params)
 
                 # Verify EUT has parameters updated.
-                ts.log_debug('EUT VW settings for this test are %s' % eut.volt_watt())
+                if eut is not None:
+                    ts.log_debug('EUT VW settings for this test are %s' % eut.volt_watt())
 
                 for power in pwr_lvls:
                     pv.power_set(p_rated*power)
-                    for n_iter in range(n_iter):
+                    for n in range(n_iter):
                         '''
                         There shall be a minimum number of 3 points tested above Vstart while increasing
                         voltage, and minimum number of 3 points tested above Vstop while decreasing voltage.
@@ -304,16 +309,19 @@ def test_run():
                         '''
                         # Include n_points on each of the 3 line segments for going up
                         if v_max_curve < v_max:
-                            v_points_up = list(np.linspace(v_min+MSA_V, v_start, n_points)) + \
-                                       list(np.linspace(v_start+MSA_V, v_max_curve-MSA_V, n_points)) + \
-                                       list(np.linspace(v_max_curve+MSA_V, v_max-MSA_V, n_points))
+                            v_points_up = list(np.linspace(v_min+MSA_V, v_start-MSA_V, n_points)) + \
+                                       list(np.linspace(v_start-MSA_V, v_max_curve, n_points)) + \
+                                       list(np.linspace(v_max_curve, v_max-MSA_V, n_points))
                         else:  # slope extends past EUT trip point - skip final line segment
                             v_points_up = list(np.linspace(v_min+MSA_V, v_start, n_points)) + \
                                        list(np.linspace(v_start+MSA_V, v_max-MSA_V, n_points))
-
                         # Include n_points on each of the 2 line segments for going down
-                        v_points_down = list(np.linspace(v_max-MSA_V, v_stop+MSA_V, n_points)) + \
-                                       list(np.linspace(v_stop-1.5*MSA_V, v_min+MSA_V, n_points))
+                        v_points_down = list(reversed(v_points_up))
+                        if hys :
+                            v_points_down = list(np.linspace(v_max-MSA_V, v_stop+MSA_V, n_points)) + \
+                                            list(np.linspace(v_stop-1.5*MSA_V, v_min+MSA_V, n_points))
+
+                        dataset_filename = 'VW_curve_%s_pwr_%0.2f_iter_%s.csv' % (vw_curve, power, n + 1)
 
                         ts.log('Testing VW function at the following voltage up points %s' % v_points_up)
                         ts.log('Testing VW function at the following voltage down points %s' % v_points_down)
@@ -325,38 +333,43 @@ def test_run():
                         least twice the manufacturer's Volt-Watt settling time, ts. IEEE 1547.1a-2015, Annex
                         A.5, can be used for reference.
                         '''
+                        daq.data_capture(True)
+
                         for v_step in v_points_up:
-                            daq.sc['volt_set'] = v_step
                             ts.log('        Recording power at voltage %0.3f V for 2*t_settling = %0.1f sec.' %
                                    (v_step, 2 * t_settling))
 
-                            p_targ, p_min_to_pass, p_max_to_pass = p_msa_range(v_value=v_step, v_msa=MSA_V, p_msa=MSA_P,
+                            p_targ, p_min, p_max = p_msa_range(v_value=v_step, v_msa=MSA_V, p_msa=MSA_P_pct,
                                                                                v_nom=v_nom, v_slope_start=v_start,
                                                                                v_slope_stop=v_max_curve)
-                            daq.sc['P_target_pct'] = p_targ
-                            daq.sc['P_min_pct'] = p_min_to_pass
-                            daq.sc['P_max_pct'] = p_max_to_pass
 
-                            test_str = 'VW_curve_%s_power=%0.2f_iter=%s' % (vw_curve, power, n_iter+1)
-                            filename = test_str + '.csv'
-                            daq.data_capture(True)
+                            daq.sc['volt_set'] = v_step
+                            daq.sc['P_target_pct'] = p_targ
+                            daq.sc['P_min_pct'] = p_min
+                            daq.sc['P_max_pct'] = p_max
                             daq.sc['event'] = 'V_Step_Up'
                             grid.voltage(v_step)
                             ts.sleep(2 * t_settling)
-                            daq.data_capture()
+                            daq.sc['event'] = 'T_settling_done_up'
+                            daq.data_sample()
                             data = daq.data_capture_read()
-                            AC_W = power_total(data, phases)
-                            AC_W_pct = (AC_W / p_rated) * 100.
-
-                            if p_min_to_pass <= AC_W_pct <= p_max_to_pass:
-                                passfail = 'Pass'
+                            ts.log_debug('Powers targ, min, max: %s, %s, %s' % (p_targ, p_min, p_max))
+                            # This is to run the VW script with manual driver
+                            if not data:
+                                AC_W = power_total(data, phases)
+                                AC_W_pct = (AC_W / p_rated) * 100.
+                                if p_min_to_pass <= AC_W_pct <= p_max_to_pass:
+                                    passfail = 'Pass'
+                                else:
+                                    passfail = 'Fail'
                             else:
+                                AC_W_pct = 'No Data'
                                 passfail = 'Fail'
 
                             result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s \n' %
-                                                 (passfail, ts.config_name(), power * 100., n_iter + 1,
+                                                 (passfail, ts.config_name(), power * 100., n + 1,
                                                   'Up', v_step, AC_W_pct, daq.sc['P_min_pct'],
-                                                  daq.sc['P_max_pct'], filename))
+                                                  daq.sc['P_max_pct'], dataset_filename))
 
                         for v_step in v_points_down:
                             '''
@@ -379,20 +392,18 @@ def test_run():
                             # begins. After timing out, the EUT should ramp at K_power_rate back to rated power assuming
                             # V_stop < V_start
 
-                            daq.sc['volt_set'] = v_step
                             ts.log('        Recording power at voltage %0.3f V for 2*t_settling = %0.1f sec.' %
                                    (v_step, 2 * t_settling))
+                            daq.sc['volt_set'] = v_step
                             daq.sc['event'] = 'V_Step_Down'
-                            test_str = 'VW_curve_%s_power=%0.2f_iter=%s' % (vw_curve, power, n_iter+1)
-                            filename = test_str + '.csv'
-                            if v_step > v_stop-1.5*MSA_V and hys:
+
+                            if hys and v_step > v_stop-1.5*MSA_V:
                                 p_targ = 0.
                                 p_min_to_pass = -MSA_P
                                 p_max_to_pass = MSA_P
                                 daq.sc['P_target_pct'] = p_targ
                                 daq.sc['P_min_pct'] = p_min_to_pass
                                 daq.sc['P_max_pct'] = p_max_to_pass
-                                daq.data_capture(True)
                                 grid.voltage(v_step)
                                 # If the t_return functionality is initiated when Vstop - MSAV < V < Vstop + MSAV
                                 # if v_step < v_stop-0.5*MSA_V:
@@ -404,14 +415,13 @@ def test_run():
                                 AC_W_pct = (power_total(data, phases) / p_rated) * 100.
                                 passfail = 'Pass' if p_min_to_pass <= AC_W_pct <= p_max_to_pass else 'Fail'
 
-                            elif v_step == v_stop-1.5*MSA_V and hys:
+                            elif hys and v_step == v_stop-1.5*MSA_V :
                                 p_targ = 100.  # it's ramping from 0 to 100
                                 p_min_to_pass = -MSA_P
                                 p_max_to_pass = MSA_P
                                 daq.sc['P_target_pct'] = p_targ
                                 daq.sc['P_min_pct'] = p_min_to_pass
                                 daq.sc['P_max_pct'] = p_max_to_pass
-                                daq.data_capture(True)
                                 grid.voltage(v_step)
                                 # Hysteresis Pass/Fail analysis
                                 hys_start_time = time.time()
@@ -445,32 +455,35 @@ def test_run():
                                     passfail = 'Fail'
 
                             else:  # in all cases without hysteresis and when v_step < v_stop-1.5*MSA_V
-                                p_targ, p_min_to_pass, p_max_to_pass = p_msa_range(v_value=v_step, v_msa=MSA_V,
-                                                                                   p_msa=MSA_P,
+                                p_targ, p_min, p_max = p_msa_range(v_value=v_step, v_msa=MSA_V,
+                                                                                   p_msa=MSA_P_pct,
                                                                                    v_nom=v_nom, v_slope_start=v_start,
                                                                                    v_slope_stop=v_max_curve)
                                 daq.sc['P_target_pct'] = p_targ
-                                daq.sc['P_min_pct'] = p_min_to_pass
-                                daq.sc['P_max_pct'] = p_max_to_pass
-                                daq.data_capture(True)
+                                daq.sc['P_min_pct'] = p_min
+                                daq.sc['P_max_pct'] = p_max
                                 grid.voltage(v_step)
                                 ts.sleep(2 * t_settling)
-                                daq.data_capture()
+                                daq.sc['event'] = 'T_settling_done_down'
+                                daq.data_sample()
                                 data = daq.data_capture_read()
-                                AC_W_pct = (power_total(data, phases) / p_rated) * 100.
-                                passfail = 'Pass' if p_min_to_pass <= AC_W_pct <= p_max_to_pass else 'Fail'
+                                ts.log_debug('Powers targ, min, max: %s, %s, %s' % (p_targ, p_min, p_max))
+                                if not data:
+                                    AC_W_pct = (power_total(data, phases) / p_rated) * 100.
+                                    passfail = 'Pass' if p_min_to_pass <= AC_W_pct <= p_max_to_pass else 'Fail'
+                                else:
+                                    AC_W_pct = 'No Data'
+                                    passfail = 'Fail'
 
                             result_summary.write('%s, %s, %s, %s, %s, %s, %s, %s, %s, %s \n' %
-                                                 (passfail, ts.config_name(), power * 100., n_iter + 1,
-                                                  'Up', v_step, AC_W_pct, daq.sc['P_min_pct'],
-                                                  daq.sc['P_max_pct'], filename))
+                                                 (passfail, ts.config_name(), power * 100., n + 1,
+                                                  'Down', v_step, AC_W_pct, daq.sc['P_min_pct'],
+                                                  daq.sc['P_max_pct'], dataset_filename))
 
-                            daq.data_capture(False)
-                            ds = daq.data_capture_dataset()
-                            ts.log('Saving file: %s' % filename)
-                            ds.to_csv(ts.result_file_path(filename))
-                            result_params['plot.title'] = test_str
-                            ts.result_file(filename, params=result_params)
+                        daq.data_capture(False)
+                        ds = daq.data_capture_dataset()
+                        ds.to_csv(ts.result_file_path(dataset_filename))
+                        ts.result_file(dataset_filename)
 
         result = script.RESULT_COMPLETE
 
@@ -478,16 +491,21 @@ def test_run():
         reason = str(e)
         if reason:
             ts.log_error(reason)
+            daq.data_capture(False)
+            ds = daq.data_capture_dataset()
+            ds.to_csv(ts.result_file_path(dataset_filename))
+            ts.result_file(dataset_filename)
+
     finally:
         if daq is not None:
             daq.close()
         if pv is not None:
-            if p_max is not None:
-                pv.power_set(p_max)
+            if p_rated is not None:
+                pv.power_set(p_rated)
             pv.close()
         if grid is not None:
-            if v_nom_grid is not None:
-                grid.voltage(v_nom_grid)
+            if v_nom is not None:
+                grid.voltage(v_nom)
             grid.close()
         if chil is not None:
             chil.close()

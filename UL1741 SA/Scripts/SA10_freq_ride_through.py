@@ -1,3 +1,34 @@
+"""
+Copyright (c) 2018, Sandia National Labs and SunSpec Alliance
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+Redistributions of source code must retain the above copyright notice, this
+list of conditions and the following disclaimer.
+
+Redistributions in binary form must reproduce the above copyright notice, this
+list of conditions and the following disclaimer in the documentation and/or
+other materials provided with the distribution.
+
+Neither the names of the Sandia National Labs and SunSpec Alliance nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Questions can be directed to support@sunspec.org
+"""
 
 import sys
 import os
@@ -7,11 +38,9 @@ from svpelab import loadsim
 from svpelab import pvsim
 from svpelab import das
 from svpelab import der
-
-import sunspec.core.client as client
-
+from svpelab import hil
 import script
-import openpyxl
+import result as rslt
 import time
 
 def freq_rt_profile(v_nom=100.0, freq_nom=100.0, freq_t=100.0, t_fall=0, t_hold=1, t_rise=0, t_dwell=5, n=5):
@@ -47,16 +76,30 @@ def freq_rt_profile(v_nom=100.0, freq_nom=100.0, freq_t=100.0, t_fall=0, t_hold=
 def test_run():
 
     result = script.RESULT_FAIL
-    eut = grid = load = pv = daq_rms = daq_wf = None
+    eut = grid = load = pv = daq_rms = daq_wf = chil = None
+
+    sc_points = ['AC_IRMS_MIN']
+
+    # result params
+    result_params = {
+        'plot.title': ts.name,
+        'plot.x.title': 'Time (secs)',
+        'plot.x.points': 'TIME',
+        'plot.y.points': 'AC_FREQ_1',
+        'plot.y.title': 'Frequency (Hz)',
+        'plot.y2.points': 'AC_IRMS_1, AC_IRMS_MIN',
+        'plot.y2.title': 'Current (A)'
+    }
 
     try:
-        test_label = ts.param('frt')
+        test_label = ts.param_value('frt.test_label')
         # get test parameters
         freq_msa = ts.param_value('eut.freq_msa')
+        p_rated = ts.param_value('eut.p_rated')
         v_nom = ts.param_value('eut.v_nom')
         t_msa = ts.param_value('eut.t_msa')
         t_dwell = ts.param_value('eut.frt_t_dwell')
-        freq_nom = ts.param_value('frt.freq_nom')
+        freq_nom = ts.param_value('eut.freq_nom')
         freq_grid_min = ts.param_value('frt.freq_grid_min')
         freq_grid_max = ts.param_value('frt.freq_grid_max')
         freq_test = ts.param_value('frt.freq_test')
@@ -81,14 +124,30 @@ def test_run():
         if ts.param_value('frt.p_20') == 'Enabled':
             power_levels.append((20, '20'))
 
+        # initialize HIL environment, if necessary
+        chil = hil.hil_init(ts)
+        if chil is not None:
+            chil.config()
+
         # grid simulator is initialized with test parameters and enabled
         grid = gridsim.gridsim_init(ts)
         profile_supported = False
-        grid.voltage((v_nom, v_nom, v_nom))
+
+        # In cases where the grid simulator has voltage rise/loss on the line to the EUT or operates through a
+        # transformer, the nominal voltage of the grid simulator won't be the same as the EUT and a correction
+        # factor is applied.
+        try:
+            v_nom_grid = grid.v_nom_param
+        except Exception, e:
+            v_nom_grid = v_nom
+
+
+        grid.voltage((v_nom_grid, v_nom_grid, v_nom_grid))
 
         # load simulator initialization
         load = loadsim.loadsim_init(ts)
-        ts.log('Load device: %s' % load.info())
+        if load is not None:
+            ts.log('Load device: %s' % load.info())
 
         # pv simulator is initialized with test parameters and enabled
         pv = pvsim.pvsim_init(ts)
@@ -96,9 +155,12 @@ def test_run():
         pv.power_on()
 
         # initialize rms data acquisition
-        daq_rms = das.das_init(ts, 'das_rms')
+        daq_rms = das.das_init(ts, 'das_rms', sc_points=sc_points)
         if daq_rms is not None:
             ts.log('DAS RMS device: %s' % (daq_rms.info()))
+            daq_rms.sc['SC_TRIG'] = 0
+            daq_rms.sc['AC_IRMS_MIN'] = ''
+
 
         # initialize waveform data acquisition
         daq_wf = das.das_init(ts, 'das_wf')
@@ -107,20 +169,22 @@ def test_run():
 
         # it is assumed the EUT is on
         eut = der.der_init(ts)
-        eut.config()
+        if eut is not None:
+            eut.config()
 
         # perform all power levels
         for power_level in power_levels:
             # set test power level
-            power = power_level[0]/100 * p_rated
+            power = float(power_level[0])/100 * p_rated
             pv.power_set(power)
-            ts.log('Setting power level to %s%% of rated, waiting 5 seconds' % (power_level[0]))
-            # delay to allow power change to take effect
-            ts.sleep(5)
+            ts.log('Setting power level to %s%% of rated' % (power_level[0]))
 
             if daq_rms is not None:
+                daq_rms.sc['AC_IRMS_MIN'] = ''
                 ts.log('Starting RMS data capture')
                 daq_rms.data_capture(True)
+                ts.log('Waiting 5 seconds to start test')
+                ts.sleep(5)
 
             if profile_supported:
                 # create and execute test profile
@@ -142,11 +206,20 @@ def test_run():
                 # execute test sequence
                 ts.log('Test duration is %s seconds' % ((float(t_dwell) + float(t_hold)) * float(n_r) +
                                                             float(t_dwell)))
+
+                # get initial current level to determine threshold
+                if daq_rms is not None:
+                    daq_rms.data_sample()
+                    data = daq_rms.data_capture_read()
+                    irms = data.get('AC_IRMS_1')
+                    if irms is not None:
+                        daq_rms.sc['AC_IRMS_MIN'] = round(irms * .8, 2)
+
                 for i in range(n_r):
                     grid.freq(freq=freq_n)
                     ts.log('Setting frequency: freq = %s for %s seconds' % (freq_n, t_dwell))
                     ts.sleep(t_dwell)
-                    grid.voltage(freq=freq_t)
+                    grid.freq(freq=freq_t)
                     ts.log('Setting frequency: freq = %s for %s seconds' % (freq_t, t_hold))
                     ts.sleep(t_hold)
                 grid.freq(freq=freq_n)
@@ -155,9 +228,11 @@ def test_run():
             if daq_rms is not None:
                 daq_rms.data_capture(False)
                 ds = daq_rms.data_capture_dataset()
-                filename = '%s_rms_%s.csv' % (test_label, power_level[1])
+                test_name = '%s_rms_%s' % (test_label, power_level[1])
+                filename = '%s.csv' % (test_name)
                 ds.to_csv(ts.result_file_path(filename))
-                ts.result_file(filename)
+                result_params['plot.title'] = test_name
+                ts.result_file(filename, params=result_params)
                 ts.log('Saving data capture %s' % (filename))
 
         result = script.RESULT_COMPLETE
@@ -167,6 +242,11 @@ def test_run():
         if reason:
             ts.log_error(reason)
     finally:
+
+        # reset to nominal frequency and full power
+        grid.freq(freq=freq_nom)
+        pv.power_set(p_rated)
+
         if eut is not None:
             eut.close()
         if grid is not None:
@@ -179,6 +259,13 @@ def test_run():
             daq_rms.close()
         if daq_wf is not None:
             daq_wf.close()
+        if chil is not None:
+            chil.close()
+
+        # create result workbook
+        file = ts.config_name() + '.xlsx'
+        rslt.result_workbook(file, ts.results_dir(), ts.result_dir())
+        ts.result_file(file)
 
     return result
 

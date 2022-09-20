@@ -38,14 +38,51 @@ from svpelab import pvsim
 from svpelab import das
 from svpelab import der
 from svpelab import loadsim
-
-import sunspec.core.client as client
-
+from svpelab import hil
+import result as rslt
 import script
-import openpyxl
 
 TRIP_WAIT_DELAY = 5
 POWER_WAIT_DELAY = 5
+
+'''
+def test_pass_fail(i_target=None, ds=None):
+
+    i_10 = i_target * .1
+    i_90 = i_target * .9
+
+    passfail = 'Fail'
+
+    point = None
+    trigger_data = []
+    try:
+        point = 'AC_IRMS_1'
+        idx = ds.points.index(point)
+        i_data = ds.data[idx]
+        point = 'TRIGGER'
+        idx = ds.points.index(point)
+        trigger_data = ds.data[idx]
+    except ValueError, e:
+        ts.fail('Data point %s not in dataset' % (point))
+    if len(trigger_data) <= 0:
+        ts.fail('No data in dataset')
+
+    for t in range(len(trigger_data)):
+        if t
+        if v_target[i] != 0:
+            act = var[i]
+            target = var_target[i]
+            min = target - var_msa
+            max = target + var_msa
+            var_act.append(var[i])
+            var_target.append(target)
+            var_min.append(min)
+            var_max.append(max)
+            if act < min or act > max:
+                passfail = 'Fail'
+
+    return (passfail)
+'''
 
 def test_run():
 
@@ -53,9 +90,18 @@ def test_run():
     grid = None
     load = None
     pv = None
-    daq_rms = None
-    daq_wf = None
+    daq = None
     eut = None
+    chil = None
+
+    # result params
+    result_params = {
+        'plot.title': 'title_name',
+        'plot.x.title': 'Time (secs)',
+        'plot.x.points': 'TIME',
+        'plot.y.points': 'AC_IRMS_1',
+        'plot.y.title': 'Current (A)'
+    }
 
     try:
         v_nom = ts.param_value('eut.v_nom')
@@ -88,9 +134,14 @@ def test_run():
             - Set all AC source parameters to the nominal operating conditions for the EUT.
             - Turn on the EUT and allow to reach steady state.
         '''
+
+        # initialize HIL environment, if necessary
+        chil = hil.hil_init(ts)
+        if chil is not None:
+            chil.config()
+
         # grid simulator is initialized with test parameters and enabled
         grid = gridsim.gridsim_init(ts)
-        profile_supported = False
 
         # load simulator initialization
         load = loadsim.loadsim_init(ts)
@@ -103,14 +154,9 @@ def test_run():
         pv.power_on()
 
         # initialize rms data acquisition
-        daq_rms = das.das_init(ts, 'das_rms')
-        if daq_rms is not None:
-            ts.log('DAS RMS device: %s' % (daq_rms.info()))
-
-        # initialize waveform data acquisition
-        daq_wf = das.das_init(ts, 'das_wf')
-        if daq_wf is not None:
-            ts.log('DAS Waveform device: %s' % (daq_wf.info()))
+        daq = das.das_init(ts, 'das_rms')
+        if daq is not None:
+            ts.log('DAS RMS device: %s' % (daq.info()))
 
         # it is assumed the EUT is on
         eut = der.der_init(ts)
@@ -118,9 +164,9 @@ def test_run():
             eut.config()
 
         if soft_start:
-            test_str = 'ss'
+            test_label = 'ss'
         else:
-            test_str = 'rr'
+            test_label = 'rr'
 
         # For each ramp rate test level in Table SA11.1
         for rr in ramp_rates:
@@ -129,48 +175,56 @@ def test_run():
             if soft_start:
                 # set soft start ramp rate
                 if eut is not None:
-                    eut.soft_start_ramp_rate(rr)
+                    eut.ramp_rates(params={'soft_start': rr * 100})
+                    # eut.soft_start_ramp_rate(rr)
                 sample_duration = duration + TRIP_WAIT_DELAY + t_reconnect
             else:
                 # set normal ramp rate
                 if eut is not None:
-                    eut.ramp_rate(rr)
+                    eut.ramp_rates(params={'ramp_rate': rr * 100})
+                    # eut.ramp_rate(rr)
                 sample_duration = duration + POWER_WAIT_DELAY
 
             for count in range(1, n_r + 1):
-                if daq_rms is not None:
-                    ts.log('Starting data capture %s' % (rr))
-                    daq_rms.data_capture(True)
+                if daq is not None:
+                    ts.log('Starting data capture %s' % rr)
+                    daq.data_capture(True)
+                    ts.log('Waiting for 3 seconds to start test')
+                    ts.sleep(3)
                 if soft_start:
                     # set to trip voltage
                     v1, v2, v3 = grid.voltage()
-                    ts.log('Nominal voltage = %s' % (v1))
-                    ts.log('Setting voltage to trip voltage (%s V)' % (v1 * v_trip/100))
-                    grid.voltage((v_trip, v2, v3))
-                    ts.log('Waiting %s seconds' % (TRIP_WAIT_DELAY))
+                    v_trip_grid = (v1 * v_trip/100)
+                    ts.log('Nominal voltage = %s' % v1)
+                    ts.log('Setting voltage to trip voltage (%s V)' % v_trip_grid)
+                    grid.voltage((v_trip_grid, v2, v3))
+                    ts.log('Waiting %s seconds' % TRIP_WAIT_DELAY)
                     ts.sleep(TRIP_WAIT_DELAY)
                     ts.log('Setting voltage to original nominal voltage (%s V)' % v1)
                     grid.voltage((v1, v2, v3))
                 else:
                     ts.log('Setting to low power threshold (%s W)' % p_low)
                     pv.power_set(p_low)
-                    ts.log('Waiting for %s seconds' % (POWER_WAIT_DELAY))
+                    ts.log('Waiting for %s seconds' % POWER_WAIT_DELAY)
                     ts.sleep(POWER_WAIT_DELAY)
 
-                ts.log('Ramp rate: %s%%/sec - pass %s' % (rr, count))
-                ts.log('Setting to I_rated: %s' % (i_rated))
+                ts.log('Ramp rate: %s%%/sec - iteration %s' % (rr, count))
+                ts.log('Setting to I_rated: %s' % i_rated)
                 pv.power_set(p_rated)
-                ts.log('Sampling for %s seconds' % (sample_duration))
+                ts.log('Sampling for %s seconds' % sample_duration)
                 ts.sleep(sample_duration)
-                if daq_rms is not None:
+                if daq is not None:
                     # Increase available input power to I_rated
                     ts.log('Sampling complete')
-                    daq_rms.data_capture(False)
-                    ds = daq_rms.data_capture_dataset()
-                    filename = '%s_%s_%s.csv' % (test_str, str(int(rr)), str(count))
+                    daq.data_capture(False)
+                    ds = daq.data_capture_dataset()
+
+                    test_name = '%s_%s_%s' % (test_label, str(int(rr)), str(count))
+                    filename = '%s.csv' % test_name
                     ds.to_csv(ts.result_file_path(filename))
-                    ts.result_file(filename)
-                    ts.log('Saving data capture %s' % (filename))
+                    result_params['plot.title'] = test_name
+                    ts.result_file(filename, params=result_params)
+                    ts.log('Saving data capture %s' % filename)
 
         result = script.RESULT_COMPLETE
 
@@ -187,10 +241,15 @@ def test_run():
             load.close()
         if pv is not None:
             pv.close()
-        if daq_rms is not None:
-            daq_rms.close()
-        if daq_wf is not None:
-            daq_wf.close()
+        if daq is not None:
+            daq.close()
+        if chil is not None:
+            chil.close()
+
+        # create result workbook
+        xlsxfile = ts.config_name() + '.xlsx'
+        rslt.result_workbook(xlsxfile, ts.results_dir(), ts.result_dir())
+        ts.result_file(xlsxfile)
 
     return result
 
